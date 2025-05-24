@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Control Panel</title>
+  <script src="//cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.0/socket.io.min.js"></script>
+  <style>
+    body { font-family: sans-serif; padding:1rem; }
+    h1 { margin-top:0; }
+    #top-controls button {
+      margin-right:0.5rem; padding:0.5rem 1rem; font-size:1rem;
+    }
+    #asset-grid, #queue {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(100px,1fr));
+      gap:0.5rem;
+      margin: 0.5rem 0;
+      border:1px solid #ccc;
+      padding:0.5rem;
+      min-height: 120px;
+    }
+    .asset-tile, .queue-tile {
+      position: relative;
+      cursor: grab;
+      border:2px solid transparent;
+      border-radius:6px;
+      overflow:hidden;
+      background:#111;
+    }
+    .asset-tile.selected, .queue-tile.current {
+      border-color:#007BFF;
+    }
+    .asset-tile img, .asset-tile video,
+    .queue-tile img, .queue-tile video {
+      width:100%; height:auto; display:block; object-fit:contain;
+    }
+    .tile-label {
+      position:absolute; bottom:2px; left:2px;
+      background:rgba(0,0,0,0.6); color:white;
+      padding:1px 4px; font-size:0.75rem;
+    }
+    #send-options, #queue-controls {
+      margin:0.5rem 0;
+    }
+    #send-options label, #queue-controls button {
+      margin-right:0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎛️ Control Panel</h1>
+
+  <div id="top-controls">
+    <button id="black-button">Go to Black Screen</button>
+    <button id="placeholder-button">Go to Placeholder</button>
+    <button onclick="step(-1)">← Previous</button>
+    <button onclick="step(1)">Next →</button>
+    <button onclick="socket.emit('fade_to_black')">Fade to Black</button>
+  <button onclick="socket.emit('play_video')">Play Video</button>
+
+  </div>
+
+  <h2>Asset Library (drag into queue)</h2>
+  <div id="asset-grid">
+    {% for slide in slides %}
+      <div class="asset-tile"
+           draggable="true"
+           data-type="slide"
+           data-name="{{ slide }}">
+        <img src="/static/slides/{{ slide }}" alt="{{ slide }}"/>
+        <div class="tile-label">{{ slide }}</div>
+      </div>
+    {% endfor %}
+    {% for vid in videos %}
+      <div class="asset-tile"
+           draggable="true"
+           data-type="video"
+           data-name="{{ vid }}">
+        <video muted>
+          <source src="/static/media/{{ vid }}" type="video/mp4">
+        </video>
+        <div class="tile-label">{{ vid }}</div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <h2>Queue</h2>
+  <div id="queue">
+    <!-- dropped assets appear here -->
+  </div>
+  <div id="queue-controls">
+    <button onclick="prevInQueue()">← Prev in Queue</button>
+    <button onclick="nextInQueue()">Next in Queue →</button>
+  </div>
+
+  <div id="send-options">
+    <label><input type="checkbox" id="fadeout-checkbox"/> Fade Out to Black</label>
+    <label><input type="checkbox" id="fadein-checkbox"/> Fade In from Black</label>
+    <label><input type="checkbox" id="autoplay-checkbox"/> Autoplay videos</label>
+    <button onclick="sendCurrent()">Send Current</button>
+  </div>
+
+  <!-- Optional preview -->
+  <div id="preview-container">
+    <h2>Preview</h2>
+    <img id="preview-img" style="max-width:100%;display:none;"/>
+    <video id="preview-video" controls style="max-width:100%;display:none;">
+      <source id="preview-source" src="" type="video/mp4">
+    </video>
+  </div>
+
+  <script>
+    const socket = io();
+
+    // ----- DRAG & DROP QUEUE -----
+    const tiles = document.querySelectorAll('.asset-tile');
+    const queueEl = document.getElementById('queue');
+    let queue = [];
+    let currentIdx = -1;
+
+    tiles.forEach(tile => {
+      tile.addEventListener('dragstart', e => {
+        e.dataTransfer.setData(
+          'text/plain',
+          JSON.stringify({
+            type: tile.dataset.type,
+            name: tile.dataset.name
+          })
+        );
+      });
+    });
+
+    queueEl.addEventListener('dragover', e => e.preventDefault());
+    queueEl.addEventListener('drop', e => {
+      e.preventDefault();
+      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+      queue.push(data);
+      renderQueue();
+    });
+
+    function renderQueue() {
+      queueEl.innerHTML = '';
+      queue.forEach((item, i) => {
+        const div = document.createElement('div');
+        div.className = 'queue-tile';
+        if (i === currentIdx) div.classList.add('current');
+
+        // thumbnail
+        if (item.type === 'slide') {
+          const img = document.createElement('img');
+          img.src = `/static/slides/${item.name}`;
+          div.appendChild(img);
+        } else {
+          const vid = document.createElement('video');
+          vid.muted = true;
+          vid.src = `/static/media/${item.name}`;
+          div.appendChild(vid);
+        }
+        const lbl = document.createElement('div');
+        lbl.className = 'tile-label';
+        lbl.textContent = item.name;
+        div.appendChild(lbl);
+        queueEl.appendChild(div);
+      });
+    }
+
+    // ----- QUEUE NAVIGATION -----
+    function nextInQueue() {
+      if (!queue.length) return;
+      currentIdx = (currentIdx + 1) % queue.length;
+      highlightQueue();
+      sendAsset(queue[currentIdx]);
+    }
+    function prevInQueue() {
+      if (!queue.length) return;
+      currentIdx = (currentIdx - 1 + queue.length) % queue.length;
+      highlightQueue();
+      sendAsset(queue[currentIdx]);
+    }
+    function highlightQueue() {
+      renderQueue();
+    }
+
+    // ----- DIRECT CONTROL -----
+    document.getElementById('black-button').onclick = () => {
+      socket.emit('fade_to_black');
+    };
+    document.getElementById('placeholder-button').onclick = () => {
+      socket.emit('display_asset', {
+        type: 'slide',
+        name: 'holdingslide.jpg',
+        autoplay: false,
+        fadeIn: false
+      });
+    };
+
+    function step(delta) {
+      socket.emit('change_slide', { index: delta }); // your existing logic
+    }
+
+    // ----- SEND CURRENT OR CUSTOM -----
+    function sendCurrent() {
+      if (currentIdx < 0 || currentIdx >= queue.length) {
+        return alert('Queue is empty or not selected.');
+      }
+      sendAsset(queue[currentIdx]);
+    }
+
+    function sendAsset(asset) {
+      const fadeOut = document.getElementById('fadeout-checkbox').checked;
+      const fadeIn  = document.getElementById('fadein-checkbox').checked;
+      const autoplay= document.getElementById('autoplay-checkbox').checked;
+
+      if (fadeOut) {
+        socket.emit('fade_to_black');
+        // wait for fade duration (match your CSS 800ms)
+        setTimeout(() => {
+          socket.emit('display_asset', {
+            ...asset,
+            autoplay,
+            fadeIn
+          });
+        }, 850);
+      } else {
+        socket.emit('display_asset', {
+          ...asset,
+          autoplay,
+          fadeIn
+        });
+      }
+    }
+
+    // ----- OPTIONAL PREVIEW -----
+    const previewImg   = document.getElementById('preview-img');
+    const previewVid   = document.getElementById('preview-video');
+    const previewSrc   = document.getElementById('preview-source');
+    queueEl.addEventListener('click', e => {
+      const idx = Array.from(queueEl.children).indexOf(e.target.closest('.queue-tile'));
+      if (idx < 0) return;
+      const item = queue[idx];
+      if (item.type === 'slide') {
+        previewVid.style.display = 'none';
+        previewImg.src = `/static/slides/${item.name}`;
+        previewImg.style.display = 'block';
+      } else {
+        previewImg.style.display = 'none';
+        previewSrc.src = `/static/media/${item.name}`;
+        previewVid.load();
+        previewVid.style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>
