@@ -1,107 +1,77 @@
-# app.py
 import os
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, send_from_directory
 from flask_socketio import SocketIO, emit
 
-app = Flask(__name__, static_folder="static")
+# Create Flask app
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'replace-with-your-secret'
+
+# Initialize Socket.IO (no async_mode override so it auto-picks gevent)
 socketio = SocketIO(app)
 
-# --- State ---
-current_index = 0
-polls = {}   # { poll_id: { question, options: {opt:count}, active, results } }
+# In-memory polls example (if you use it)
+polls = {}
 
-# --- Routes ---
-@app.route("/")
-def audience():
-    return render_template("audience.html")
-
+# Serve control panel
 @app.route('/control')
 def control():
+    # Dynamically list slides and videos
     slides_dir = os.path.join(app.root_path, 'static', 'slides')
-    # include png, jpg, jpeg
-    slides = sorted([
-        f for f in os.listdir(slides_dir)
-        if f.lower().endswith(('.png', '.jpg', '.jpeg'))
-    ])
-
+    slides = sorted(f for f in os.listdir(slides_dir)
+                    if f.lower().endswith(('.png', '.jpg', '.jpeg')))
     media_dir = os.path.join(app.root_path, 'static', 'media')
-    videos = [f for f in os.listdir(media_dir)
-              if f.lower().endswith(('.mp4', '.webm', '.ogg'))]
+    videos = sorted(f for f in os.listdir(media_dir)
+                    if f.lower().endswith(('.mp4', '.webm', '.ogg')))
+    return render_template('control.html', slides=slides, videos=videos)
 
-    return render_template(
-        'control.html',
-        slides=slides,
-        videos=videos,
-        polls=polls
-    )
+# Serve audience view
+@app.route('/')
+def audience():
+    return render_template('audience.html')
 
-@socketio.on('fade_to_black')
-def handle_fade_to_black():
-    emit('fade_to_black', broadcast=True)
+# Debug handler: slide paging
+@socketio.on('change_slide')
+def on_change_slide(data):
+    print("👂 [server] change_slide received:", data)
+    emit('slide_update', data, broadcast=True)
 
-@socketio.on('play_video')
-def handle_play_video():
-    emit('play_video', broadcast=True)
-
-
-
-@socketio.on('play_media')
-def on_play_media(data):
-    filename = data.get('filename')
-    # Broadcast to audience clients
-    emit('play_media', {'filename': filename}, broadcast=True)
-
-@socketio.on('stop_media')
-def on_stop_media():
-    emit('stop_media', broadcast=True)
-    
-
-
-
-@app.route("/create_poll", methods=["POST"])
-def create_poll():
-    data = request.json
-    pid = str(len(polls)+1)
-    polls[pid] = {
-        "question": data["question"],
-        "options": {opt: 0 for opt in data["options"]},
-        "active": True
-    }
-    socketio.emit("new_poll", {"id": pid, **polls[pid]})
-    return jsonify(success=True, poll_id=pid)
-
-# --- SocketIO events ---
-@socketio.on("change_slide")
-def on_change(data):
-    global current_index
-    current_index = data["index"]
-    emit("slide_update", {"index": current_index}, broadcast=True)
-
-@socketio.on("vote")
-def on_vote(data):
-    pid = data["poll_id"]
-    opt = data["option"]
-    if pid in polls and polls[pid]["active"]:
-        polls[pid]["options"][opt] += 1
-        # broadcast updated results to control panel
-        emit("poll_update", {"poll_id": pid, "results": polls[pid]["options"]}, broadcast=False)
-
-@socketio.on("close_poll")
-def on_close(data):
-    pid = data["poll_id"]
-    if pid in polls:
-        polls[pid]["active"] = False
-        emit("poll_closed", {"poll_id": pid, "results": polls[pid]["options"]}, broadcast=True)
-
+# Debug handler: display any asset
 @socketio.on('display_asset')
 def on_display_asset(data):
-    # debug log
-    print(f"[socketio] display_asset received: {data}")
-    # broadcast to everyone
+    print("👂 [server] display_asset received:", data)
     emit('display_asset', data, broadcast=True)
 
+# Debug handler: fade to black
+@socketio.on('fade_to_black')
+def on_fade_to_black():
+    print("👂 [server] fade_to_black received")
+    emit('fade_to_black', broadcast=True)
 
+# Debug handler: play video
+@socketio.on('play_video')
+def on_play_video():
+    print("👂 [server] play_video received")
+    emit('play_video', broadcast=True)
 
-if __name__ == "__main__":
+# Debug handler: votes (if using polls)
+@socketio.on('vote')
+def on_vote(payload):
+    print("👂 [server] vote:", payload)
+    # you’d normally store and maybe emit updated results here
+
+# Static files for favicon (optional)
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(os.path.join(app.root_path, 'static'),
+                               'favicon.ico', mimetype='image/vnd.microsoft.icon')
+
+if __name__ == '__main__':
+    # Make sure to run via `python app.py` in a terminal
     print("⚙️  Starting SocketIO server…")
-    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
+    socketio.run(
+        app,
+        host='0.0.0.0',
+        port=5000,
+        debug=True,
+        use_reloader=True
+    )

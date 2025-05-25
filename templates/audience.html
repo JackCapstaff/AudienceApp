@@ -4,7 +4,11 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Audience View</title>
-  <script src="/socket.io/socket.io.js"></script>
+  <script
+    src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.0/socket.io.min.js"
+    integrity="sha512-+FGF7mOcNq8dkKKWfkpEcJ8/0kgaSqU5unas47gfYXZxslWoUWg1I1l0sT/u5X8iO9VZrKxQ6AzlvbC0l8VRTg=="
+    crossorigin="anonymous" referrerpolicy="no-referrer">
+  </script>
   <style>
     html, body {
       margin: 0; padding: 0; height: 100%; overflow: hidden;
@@ -68,6 +72,15 @@
 
   <script>
     const socket       = io();
+    console.log("🔗 socket.io client version:", io.protocol, "connecting to", window.location.origin);
+    socket.on("connect", () => {
+      console.log("🟢 socket connected, id=", socket.id);
+    });
+    socket.on("connect_error", (err) => {
+      console.error("❌ Socket connect_error:", err);
+    });
+
+    
     const slideImg     = document.getElementById('slide-img');
     const mediaPlayer  = document.getElementById('media-player');
     const mediaSource  = document.getElementById('media-source');
