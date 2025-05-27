@@ -105,6 +105,14 @@ def on_display_asset(data):
         asset['video_time'] = get_video_current_time()
     emit('display_asset', asset, broadcast=True)
 
+@socketio.on('transition')
+def on_transition(data):
+    emit('transition', data, broadcast=True)
+
+@socketio.on('crossfade_to')
+def on_crossfade_to(asset):
+    emit('crossfade_to', asset, broadcast=True)
+
 @socketio.on('fade_to_black')
 def on_fade_to_black():
     emit('fade_to_black', broadcast=True)

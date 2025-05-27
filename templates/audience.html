@@ -4,97 +4,78 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Audience View</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.min.js"
-          integrity="sha512-N5JbZMETkl+0SZh5l8OA2VxSfF120owfQyy54iAXTJIKuqAn3A9TrNz1ypB55o8aSU5MxaodEgv74wGUvgUynQ=="
-          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.min.js" crossorigin="anonymous"></script>
   <style>
-    html, body {
-      margin: 0; padding: 0; height: 100%; overflow: hidden;
-      background: black;
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: black; }
+    #asset-stack { position:relative; width:100vw; height:100vh; }
+    #slide-img, #media-player, #black-overlay, #crossfade-img, #crossfade-video {
+      position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: contain;
     }
-    #slide-img, #media-player, #black-overlay {
-      position: absolute; top: 0; left: 0;
-      width: 100vw; height: 100vh;
-      object-fit: contain;
-    }
-    #media-player {
-      display: none;
-    }
-    #black-overlay {
+    #media-player, #slide-img { z-index: 1; }
+    #crossfade-img, #crossfade-video {
       position: absolute;
       top: 0; left: 0;
       width: 100vw; height: 100vh;
-      background: black;
-      display: block;
-      opacity: 0;
-      transition: opacity 0.8s ease;
+      object-fit: contain;
       z-index: 5;
+      pointer-events: none;
+      display: none;
+      opacity: 0;
+      transition: opacity 2s linear;
+    }
+    #black-overlay {
+      z-index: 5; background: black; display: block; opacity: 0; transition: opacity 0.8s ease;
     }
     #black-overlay.blackened { opacity: 1; }
-    #black-overlay.fade-in { opacity: 1; transition: opacity 0.05s ease; }
     #poll {
-      position: absolute; top: 0; left: 0;
-      width: 100vw; height: 100vh;
-      display: none;
-      background: rgba(0,0,0,0.8);
-      color: white; font-family: sans-serif;
-      display: flex; flex-direction: column;
-      justify-content: center; align-items: center;
-      padding: 1rem; box-sizing: border-box;
-      z-index: 10;
+      position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+      display: none; background: rgba(0,0,0,0.8); color: white; font-family: sans-serif;
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      padding: 1rem; box-sizing: border-box; z-index: 10;
     }
     #poll h1 { margin: 0 0 1rem; font-size: 2rem; text-align: center; }
-    #poll-options button {
-      margin: 0.5rem; padding: 0.75rem 1.5rem;
-      font-size: 1.2rem; cursor: pointer;
-    }
+    #poll-options button { margin: 0.5rem; padding: 0.75rem 1.5rem; font-size: 1.2rem; cursor: pointer; }
   </style>
 </head>
 <body>
-  <!-- Holding slide on load -->
-  <img id="slide-img" src="/static/slides/holdingslide.jpg" alt="Holding Slide"/>
-
-  <!-- Video player -->
-  <video id="media-player" playsinline webkit-playsinline>
-    <source id="media-source" src="" type="video/mp4">
-    Your browser doesn’t support HTML5 video.
-  </video>
-
-  <!-- Black overlay -->
-  <div id="black-overlay"></div>
-
-  <!-- Poll overlay -->
-  <div id="poll">
-    <h1 id="poll-question"></h1>
-    <div id="poll-options"></div>
+  <div id="asset-stack">
+    <img id="slide-img" src="/static/slides/holdingslide.jpg" alt="Holding Slide"/>
+    <video id="media-player" playsinline webkit-playsinline>
+      <source id="media-source" src="" type="video/mp4">
+      Your browser doesn’t support HTML5 video.
+    </video>
+    <!-- Crossfade layer -->
+    <img id="crossfade-img" style="display:none;"/>
+    <video id="crossfade-video" style="display:none;" playsinline webkit-playsinline></video>
+    <div id="black-overlay"></div>
+    <div id="poll">
+      <h1 id="poll-question"></h1>
+      <div id="poll-options"></div>
+    </div>
   </div>
-
   <script>
-    const socket = io({
-      transports: ['websocket'],
-      upgrade: false,
-      secure: true
-    });
-
-    const slideImg     = document.getElementById('slide-img');
-    const mediaPlayer  = document.getElementById('media-player');
-    const mediaSource  = document.getElementById('media-source');
+    const socket = io({ transports: ['websocket'], upgrade: false, secure: true });
+    const slideImg = document.getElementById('slide-img');
+    const mediaPlayer = document.getElementById('media-player');
+    const mediaSource = document.getElementById('media-source');
+    const crossfadeImg = document.getElementById('crossfade-img');
+    const crossfadeVideo = document.getElementById('crossfade-video');
     const blackOverlay = document.getElementById('black-overlay');
-    const pollOverlay  = document.getElementById('poll');
+    const pollOverlay = document.getElementById('poll');
     const pollQuestion = document.getElementById('poll-question');
-    const pollOptions  = document.getElementById('poll-options');
+    const pollOptions = document.getElementById('poll-options');
 
-    // Keep track of last asset so state updates (play/pause etc) work reliably
-    let lastAsset = {
-      type: 'slide',
-      name: 'holdingslide.jpg'
-    };
+    let lastAsset = { type: 'slide', name: 'holdingslide.jpg' };
 
-    // === Main asset update function ===
-    function updateView(asset) {
-      lastAsset = asset;
+    // Use a default, but let the event override!
+    let CROSSFADE_DURATION = 2000; // ms
+
+    function updateView(asset, fromCrossfade) {
+      if (!fromCrossfade) lastAsset = asset;
       pollOverlay.style.display = 'none';
       blackOverlay.classList.remove('blackened');
+      crossfadeImg.style.display = 'none'; crossfadeImg.style.opacity = 0; crossfadeImg.style.transition = "";
+      crossfadeVideo.style.display = 'none'; crossfadeVideo.style.opacity = 0; crossfadeVideo.style.transition = "";
       if (asset.type === 'slide') {
         mediaPlayer.pause(); mediaPlayer.style.display = 'none';
         slideImg.style.display = 'block';
@@ -110,14 +91,89 @@
           let videoSpeed = Number(asset.video_speed) || 1.0;
           mediaPlayer.currentTime = videoTime;
           mediaPlayer.playbackRate = videoSpeed;
-          mediaPlayer.muted = true; // <<--- KEY LINE!
+          mediaPlayer.muted = true;
+          //Account for autoplay
           if (!asset.video_paused || asset.autoplay) {
             mediaPlayer.play().catch((err)=>{console.warn("Video play error:", err);});
+            mediaPlayer.onended = function() {
+              if (asset.autoplay) {
+                // Find the index of the current asset in the queue
+                const currentAssetIndex = queue.findIndex(item => item.name === asset.name);
+                // Determine the next asset index
+                let nextIdx = (currentAssetIndex + 1) % queue.length;
+                let nextAsset = queue[nextIdx];
+                // Go to the next asset
+                currentIdx = nextIdx;
+                sendAsset(nextAsset, currentIdx);
+              }
+              mediaPlayer.onended = null;
+            }
           } else {
             mediaPlayer.pause();
           }
         };
       }
+    }
+
+    function crossfadeTo(asset) {
+      // 1. Get the duration (ms)
+      let durationMs = (asset.crossfade_duration ? asset.crossfade_duration * 1000 : 2000);
+
+      // 2. Place a copy of outgoing asset in the crossfade overlay (on top)
+      if (lastAsset.type === 'slide') {
+        crossfadeImg.src = `/static/slides/${lastAsset.name}`;
+        crossfadeImg.style.display = 'block';
+        crossfadeImg.style.opacity = 1;
+        crossfadeImg.style.transition = "";
+        crossfadeVideo.style.display = 'none';
+      } else if (lastAsset.type === 'video') {
+        crossfadeVideo.src = `/static/media/${lastAsset.name}`;
+        crossfadeVideo.currentTime = mediaPlayer.currentTime;
+        crossfadeVideo.playbackRate = mediaPlayer.playbackRate;
+        crossfadeVideo.muted = true;
+        crossfadeVideo.style.display = 'block';
+        crossfadeVideo.style.opacity = 1;
+        crossfadeVideo.style.transition = "";
+        crossfadeVideo.play().catch(()=>{});
+        crossfadeImg.style.display = 'none';
+      } else {
+        // Add a catch all condition here
+        crossfadeVideo.src = `/static/media/${lastAsset.name}`;
+        crossfadeVideo.currentTime = mediaPlayer.currentTime;
+        crossfadeVideo.playbackRate = mediaPlayer.playbackRate;
+        crossfadeVideo.muted = true;
+        crossfadeVideo.style.display = 'block';
+        crossfadeVideo.style.opacity = 1;
+        crossfadeVideo.style.transition = "";
+        crossfadeVideo.play().catch(()=>{});
+        crossfadeImg.style.display = 'none';
+      }
+
+      // 3. Instantly swap main asset underneath (no fade)
+      updateView(asset, true); // "fromCrossfade" flag, so lastAsset doesn't update yet
+
+      // 4. Animate fade out of overlay
+      setTimeout(() => {
+        let fadeEl = crossfadeImg;
+        //Use the correct fade element
+        if (lastAsset.type === "slide") {
+          fadeEl = crossfadeImg;
+        } else {
+          fadeEl = crossfadeVideo
+        }
+        fadeEl.style.transition = `opacity ${durationMs/1000}s linear`;
+        fadeEl.style.opacity = 0;
+
+        // Remove the overlay after the fade completes
+        setTimeout(() => {
+          fadeEl.style.display = 'none';
+          fadeEl.style.transition = "";
+        }, durationMs);
+
+      }, 10);
+
+      // 5. Now update lastAsset to the new one
+      lastAsset = asset;
     }
 
     function updateVideoState(assetUpdate) {
@@ -130,7 +186,7 @@
         if (typeof asset.video_speed !== "undefined") {
           mediaPlayer.playbackRate = Number(asset.video_speed) || 1.0;
         }
-        mediaPlayer.muted = true; // <<--- KEY LINE!
+        mediaPlayer.muted = true;
         if (!asset.video_paused) {
           mediaPlayer.play().catch((err)=>{console.warn("Video play error:", err);});
         } else {
@@ -139,21 +195,22 @@
       }
     }
 
-
-    // Main events
     socket.on("sync_state", updateView);
     socket.on("display_asset", updateView);
-
     socket.on('play_pause_video', updateVideoState);
-    socket.on('set_playback_speed', asset => {
-      // 'asset' might just be {speed}, merge into last asset for safety
-      updateVideoState(Object.assign({}, lastAsset, { video_speed: asset.speed }));
-    });
-    socket.on('seek_video', ({time}) => {
-      updateVideoState(Object.assign({}, lastAsset, { video_time: time }));
-    });
+    socket.on('set_playback_speed', asset => updateVideoState(Object.assign({}, lastAsset, { video_speed: asset.speed })));
+    socket.on('seek_video', ({time}) => updateVideoState(Object.assign({}, lastAsset, { video_time: time })));
+    socket.on('crossfade_to', crossfadeTo);
 
-    // Existing slide paging (legacy, if still used)
+    socket.on('transition', (data) => {
+      if (data.name === 'fade_to_black') {
+        blackOverlay.classList.add('blackened');
+      } else if (data.name === 'fade_from_black') {
+        blackOverlay.classList.remove('blackened');
+      }
+    });
+    socket.on('fade_to_black', () => blackOverlay.classList.add('blackened'));
+
     function showSlide(index) {
       pollOverlay.style.display = 'none';
       mediaPlayer.pause(); mediaPlayer.currentTime = 0;
@@ -168,13 +225,6 @@
       };
     }
     socket.on('slide_update', ({index}) => showSlide(index));
-
-    // Fade-to-black support
-    socket.on('fade_to_black', () => {
-      blackOverlay.classList.add('blackened');
-    });
-
-    // Poll overlay unchanged
     socket.on('new_poll', p => {
       slideImg.style.display = 'none';
       mediaPlayer.pause(); mediaPlayer.style.display = 'none';
@@ -185,8 +235,7 @@
         btn.textContent = opt;
         btn.onclick = () => {
           socket.emit('vote', { poll_id: p.id, option: opt });
-          pollOptions.querySelectorAll('button')
-            .forEach(b => b.disabled = true);
+          pollOptions.querySelectorAll('button').forEach(b => b.disabled = true);
         };
         pollOptions.appendChild(btn);
       });
@@ -196,21 +245,11 @@
       pollOverlay.style.display = 'none';
       slideImg.style.display = 'block';
     });
-
-    // Stop media (if you emit this)
     socket.on('stop_media', () => {
       mediaPlayer.pause(); mediaPlayer.currentTime = 0;
       mediaPlayer.style.display = 'none';
       slideImg.style.display = 'block';
     });
-
-    // (Unused) fade-in reveal, if you re-enable this
-    function revealFade() {
-      blackOverlay.style.opacity = '0';
-      blackOverlay.addEventListener('transitionend', () => {
-        blackOverlay.style.display = 'none';
-      }, { once: true });
-    }
   </script>
 </body>
 </html>

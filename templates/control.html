@@ -5,21 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Control Panel</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.min.js"
-          integrity="sha512-N5JbZMETkl+0SZh5l8OA2VxSfF120owfQyy54iAXTJIKuqAn3A9TrNz1ypB55o8aSU5MxaodEgv74wGUvgUynQ=="
-          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+          crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
   <style>
     body { font-family: sans-serif; padding:1rem; }
     h1 { margin-top: 0; }
     #top-controls button { margin-right:0.5rem; padding:0.5rem 1rem; }
-    #asset-grid, #queue {
+    #asset-grid, #queue, #transition-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(100px,1fr));
       gap:0.5rem;
       margin: 0.5rem 0; border:1px solid #ccc; padding:0.5rem; min-height: 120px;
     }
-    .asset-tile, .queue-tile {
+    .asset-tile, .queue-tile, .transition-tile {
       position: relative; cursor: grab; border:2px solid transparent; border-radius:6px; overflow:hidden; background:#111;
+      user-select: none;
     }
     .queue-tile.current { border-color:#007BFF; }
     .asset-tile img, .asset-tile video, .queue-tile img, .queue-tile video {
@@ -43,16 +43,25 @@
     #media-controls { margin-top: 1rem; }
     #media-scrubber { width: 220px; vertical-align: middle; }
     #media-time { font-family: monospace; margin-left: 0.4em; }
+    .transition-label { font-weight:bold; letter-spacing: 1px; }
+    #transition-box { border:2px dashed #888; margin-bottom:1rem; background:#222; padding:0.5rem; }
+    #transition-box h3 { margin:0 0 0.3em 0; color:#ccc; font-size:1.1em;}
   </style>
 </head>
 <body>
   <h1>🎛️ Control Panel</h1>
-
   <div id="top-controls">
     <button id="black-button">Go to Black Screen</button>
     <button id="placeholder-button">Go to Placeholder</button>
     <button onclick="step(-1)">← Previous</button>
     <button onclick="step(1)">Next →</button>
+  </div>
+
+  <div id="crossfade-settings" style="margin:0.5em 0;">
+    <label>Crossfade Duration:
+      <input type="number" id="crossfade-duration" min="0.2" max="10" step="0.1" value="2.0" style="width:4em;">
+      seconds
+    </label>
   </div>
 
   <h2>Asset Library (drag into queue)</h2>
@@ -73,6 +82,32 @@
         <div class="tile-label">{{ vid }}</div>
       </div>
     {% endfor %}
+  </div>
+
+  <div id="transition-box">
+    <h3>Transitions &amp; Cues (drag to queue):</h3>
+    <div id="transition-grid">
+      <div class="transition-tile" draggable="true" data-type="transition" data-name="fade_to_black">
+        <div style="background:#000;width:100%;height:60px;display:flex;align-items:center;justify-content:center;">
+          <span class="transition-label" style="color:white;">Fade to Black</span>
+        </div>
+      </div>
+      <div class="transition-tile" draggable="true" data-type="transition" data-name="fade_from_black">
+        <div style="background:#444;width:100%;height:60px;display:flex;align-items:center;justify-content:center;">
+          <span class="transition-label" style="color:white;">Fade from Black</span>
+        </div>
+      </div>
+      <div class="transition-tile" draggable="true" data-type="transition" data-name="crossfade">
+        <div style="background:linear-gradient(90deg,#111,#fff,#111);width:100%;height:60px;display:flex;align-items:center;justify-content:center;">
+          <span class="transition-label" style="color:black;">Crossfade</span>
+        </div>
+      </div>
+      <div class="transition-tile" draggable="true" data-type="cue" data-name="autoplay_next">
+        <div style="background:#005bb5;width:100%;height:60px;display:flex;align-items:center;justify-content:center;">
+          <span class="transition-label" style="color:white;">Autoplay Next</span>
+        </div>
+      </div>
+    </div>
   </div>
 
   <h2>Queue</h2>
@@ -120,28 +155,44 @@
   </div>
 
   <script>
-    // --- Socket.IO setup ---
     const socket = io({ transports: ['websocket'], upgrade: false, secure: true });
-    socket.on("connect", () => { console.log("🟢 socket connected, id=", socket.id); });
-    socket.on("connect_error", (err) => { console.error("❌ Socket connect_error:", err); });
 
-    // --- Drag & Drop Queue ---
-    const tiles = document.querySelectorAll('.asset-tile');
+    // Black & Placeholder
+    document.getElementById('black-button').onclick = () => {
+      socket.emit('transition', { name: 'fade_to_black' });
+    };
+    document.getElementById('placeholder-button').onclick = () => {
+      socket.emit('display_asset', {
+        type: 'slide',
+        name: 'holdingslide.jpg',
+        autoplay: false,
+        fadeIn: false
+      });
+    };
+
+    // Drag/Drop assets & transitions
+    const assetTiles = document.querySelectorAll('.asset-tile');
+    const transitionTiles = document.querySelectorAll('.transition-tile');
     const queueEl = document.getElementById('queue');
     let queue = [], currentIdx = -1;
 
-    tiles.forEach(tile => {
+    function handleTileDragStart(tile, type) {
       tile.addEventListener('dragstart', e => {
         e.dataTransfer.setData('text/plain', JSON.stringify({
           type: tile.dataset.type,
           name: tile.dataset.name
         }));
       });
-      tile.addEventListener('click', () => {
+      tile.addEventListener('dblclick', () => {
         queue.push({ type: tile.dataset.type, name: tile.dataset.name });
         renderQueue();
       });
-    });
+      tile.addEventListener('click', () => {
+        if(type === "asset") previewQueueItem({ type: tile.dataset.type, name: tile.dataset.name });
+      });
+    }
+    assetTiles.forEach(tile => handleTileDragStart(tile, "asset"));
+    transitionTiles.forEach(tile => handleTileDragStart(tile, "transition"));
 
     queueEl.addEventListener('dragover', e => e.preventDefault());
     queueEl.addEventListener('drop', e => {
@@ -156,22 +207,33 @@
       queue.forEach((item, i) => {
         const div = document.createElement('div');
         div.className = 'queue-tile' + (i === currentIdx ? ' current' : '');
-
         div.addEventListener('click', () => {
           currentIdx = i;
           renderQueue();
           previewQueueItem(item);
         });
-
         if (item.type === 'slide') {
           const img = document.createElement('img');
           img.src = `/static/slides/${item.name}`;
           div.appendChild(img);
-        } else {
+        } else if (item.type === 'video') {
           const vid = document.createElement('video');
           vid.muted = true;
           vid.src = `/static/media/${item.name}`;
           div.appendChild(vid);
+        } else if (item.type === 'transition' || item.type === 'cue') {
+          let label = '';
+          if (item.name === 'fade_to_black') label = 'Fade to Black';
+          if (item.name === 'fade_from_black') label = 'Fade from Black';
+          if (item.name === 'crossfade') label = 'Crossfade';
+          if (item.name === 'autoplay_next') label = 'Autoplay Next';
+          const div2 = document.createElement('div');
+          div2.style.cssText = 'background:#000;width:100%;height:60px;display:flex;align-items:center;justify-content:center;';
+          if(item.name === 'fade_from_black') div2.style.background='#444';
+          if(item.name === 'crossfade') div2.style.background='linear-gradient(90deg,#111,#fff,#111)';
+          if(item.name === 'autoplay_next') div2.style.background='#005bb5';
+          div2.innerHTML = `<span class="transition-label" style="color:${item.name==='crossfade'?'black':'white'}">${label}</span>`;
+          div.appendChild(div2);
         }
         const lbl = document.createElement('div');
         lbl.className = 'tile-label';
@@ -195,22 +257,43 @@
       previewQueueItem(queue[currentIdx]);
     }
 
-    // --- Step by delta (legacy slide mode) ---
     function step(delta) {
       socket.emit('change_slide', { index:delta });
     }
 
-    // --- Send Current Asset to Audience ---
+    // --- Send Current Asset (with true crossfade and duration) ---
+    let autoplayEnabled = false;
     function sendCurrent() {
       if (currentIdx < 0 || currentIdx >= queue.length) {
         return alert('Please queue and select an asset first.');
       }
-      sendAsset(queue[currentIdx]);
+      sendAsset(queue[currentIdx], currentIdx);
     }
-    function sendAsset(asset) {
+    function sendAsset(asset, idx) {
       const fadeOut = document.getElementById('fadeout-checkbox').checked;
       const fadeIn  = document.getElementById('fadein-checkbox').checked;
       const autoplay= document.getElementById('autoplay-checkbox').checked;
+
+      if (asset.type === "transition") {
+        if (asset.name === "crossfade") {
+          const nextIdx = (idx + 1) % queue.length;
+          const nextAsset = queue[nextIdx];
+          if (nextAsset && (nextAsset.type === 'slide' || nextAsset.type === 'video')) {
+            currentIdx = nextIdx;
+            renderQueue();
+            let duration = parseFloat(document.getElementById('crossfade-duration').value) || 2.0;
+            socket.emit('crossfade_to', { ...nextAsset, crossfade_duration: duration });
+          }
+        } else {
+          socket.emit('transition', { name: asset.name });
+        }
+        return;
+      }
+      if (asset.type === "cue" && asset.name === "autoplay_next") {
+        autoplayEnabled = true;
+        alert("Autoplay Next enabled for next video.");
+        return;
+      }
       if (fadeOut) {
         socket.emit('fade_to_black');
         setTimeout(() => {
@@ -219,9 +302,40 @@
       } else {
         socket.emit('display_asset', { ...asset, fadeIn, autoplay });
       }
+      if (asset.type === 'video' && autoplayEnabled) {
+        setupAutoplayListener();
+        autoplayEnabled = false; // one shot
+      }
     }
 
-    // --- Preview ---
+    function setupAutoplayListener() {
+      const video = document.getElementById('current-audience-video');
+      video.onended = function() {
+        let nextIdx = (currentIdx + 1) % queue.length;
+        let nextAsset = queue[nextIdx];
+        let lookahead = queue[nextIdx + 1] || {};
+        if (nextAsset && nextAsset.type === 'transition' && nextAsset.name === 'crossfade') {
+          const nextNextIdx = (nextIdx + 1) % queue.length;
+          const assetToFade = queue[nextNextIdx];
+          if (assetToFade && (assetToFade.type === 'slide' || assetToFade.type === 'video')) {
+            currentIdx = nextNextIdx;
+            renderQueue();
+            let duration = parseFloat(document.getElementById('crossfade-duration').value) || 2.0;
+            socket.emit('crossfade_to', { ...assetToFade, crossfade_duration: duration });
+            video.onended = null;
+            return;
+          }
+        }
+        if (nextAsset && (nextAsset.type === 'slide' || nextAsset.type === 'video')) {
+          currentIdx = nextIdx;
+          renderQueue();
+          sendAsset(nextAsset, currentIdx);
+        }
+        video.onended = null;
+      };
+    }
+
+    // --- Preview logic (your prior implementation) ---
     const previewImg   = document.getElementById('preview-img');
     const previewVid   = document.getElementById('preview-video');
     const previewSrc   = document.getElementById('preview-source');
@@ -230,11 +344,14 @@
         previewVid.style.display = 'none';
         previewImg.src = `/static/slides/${item.name}`;
         previewImg.style.display = 'block';
-      } else {
+      } else if (item.type === 'video') {
         previewImg.style.display = 'none';
         previewSrc.src = `/static/media/${item.name}`;
         previewVid.load();
         previewVid.style.display = 'block';
+      } else {
+        previewVid.style.display = 'none';
+        previewImg.style.display = 'none';
       }
     }
 
@@ -242,17 +359,11 @@
     socket.on('sync_state', updateAudiencePanel);
     socket.on('display_asset', updateAudiencePanel);
     socket.on('play_pause_video', updateAudiencePanel);
-    socket.on('set_playback_speed', asset => updateAudiencePanelLast(asset));
-    socket.on('seek_video', asset => updateAudiencePanelLast(asset));
+    socket.on('set_playback_speed', updateAudiencePanel);
+    socket.on('seek_video', updateAudiencePanel);
 
     function updateAudiencePanel(asset) {
-      if (!asset) return socket.emit("sync_state_request", null);
-      updateAudiencePanelLast(asset);
-    }
-
-    let lastAssetForAudience = null;
-    function updateAudiencePanelLast(asset) {
-      lastAssetForAudience = asset;
+      if (!asset) return;
       const currentAudienceImg = document.getElementById('current-audience-img');
       const currentAudienceVid = document.getElementById('current-audience-video');
       const currentAudienceSrc = document.getElementById('current-audience-source');
@@ -278,41 +389,6 @@
       }
     }
 
-    // --- Media Controls: Play/Pause, Speed, Scrub ---
-    const playPauseBtn = document.getElementById('play-pause-button');
-    const speedInput = document.getElementById('playback-speed');
-    const scrubber = document.getElementById('media-scrubber');
-    const timeLabel = document.getElementById('media-time');
-    const currentAudienceVid = document.getElementById('current-audience-video');
-
-    playPauseBtn.onclick = () => socket.emit('play_pause_video');
-    speedInput.onchange = () => {
-      const speed = parseFloat(speedInput.value);
-      socket.emit('set_playback_speed', { speed: speed });
-    };
-
-    let ignoreScrubEvent = false;
-    currentAudienceVid.addEventListener('timeupdate', () => {
-      ignoreScrubEvent = true;
-      scrubber.value = currentAudienceVid.currentTime;
-      timeLabel.textContent = formatTime(currentAudienceVid.currentTime) + ' / ' +
-        formatTime(currentAudienceVid.duration);
-      ignoreScrubEvent = false;
-    });
-    currentAudienceVid.addEventListener('durationchange', () => {
-      scrubber.max = currentAudienceVid.duration;
-    });
-    scrubber.addEventListener('input', () => {
-      if (ignoreScrubEvent) return;
-      socket.emit('seek_video', { time: parseFloat(scrubber.value) });
-    });
-    function formatTime(sec) {
-      if (isNaN(sec)) return "00:00";
-      const m = Math.floor(sec / 60);
-      const s = Math.floor(sec % 60);
-      return `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
-    }
-
     // --- Sortable Queue ---
     new Sortable(queueEl, {
       animation: 150,
@@ -331,42 +407,43 @@
       }
     });
 
-    // --- Presets ---
-    document.getElementById('save-preset-button').addEventListener('click', () => {
-      const presetName = prompt("Enter a name for the preset:");
-      if (presetName) {
-        localStorage.setItem(`queue_preset_${presetName}`, JSON.stringify(queue));
-        alert(`Preset "${presetName}" saved!`);
+    // --- Keyboard Shortcuts ---
+    const playPauseBtn = document.getElementById('play-pause-button');
+    document.addEventListener('keydown', function(event) {
+      if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+      if (event.key === 'ArrowRight') {
+        nextInQueue();
+        event.preventDefault();
+      } else if (event.key === 'ArrowLeft') {
+        prevInQueue();
+        event.preventDefault();
+      } else if (event.key === 'Enter') {
+        sendCurrent();
+        event.preventDefault();
+      } else if (event.code === 'Space') {
+        playPauseBtn.click();
+        event.preventDefault();
       }
     });
 
-    document.getElementById('load-preset-button').addEventListener('click', () => {
-      const presetName = prompt("Enter the name of the preset to load:");
-      if (presetName) {
-        const savedQueue = localStorage.getItem(`queue_preset_${presetName}`);
-        if (savedQueue) {
-          queue = JSON.parse(savedQueue);
-          currentIdx = -1;
-          renderQueue();
-          alert(`Preset "${presetName}" loaded!`);
-        } else {
-          alert(`Preset "${presetName}" not found.`);
-        }
+    // Play/Pause button logic
+    playPauseBtn.onclick = () => {
+      const video = document.getElementById('current-audience-video');
+      if (video.style.display === 'block') {
+        if (video.paused) { video.play(); } else { video.pause(); }
       }
-    });
-
-    // --- Black/Placeholder ---
-    document.getElementById('black-button').onclick = () => {
-      socket.emit('fade_to_black');
-    };
-    document.getElementById('placeholder-button').onclick = () => {
-      socket.emit('display_asset', {
-        type:'slide', name:'holdingslide.jpg',
-        autoplay:false, fadeIn:false
-      });
+      socket.emit('play_pause_video');
     };
 
     // --- INIT ---
+    // Sticky crossfade duration
+    const crossfadeInput = document.getElementById('crossfade-duration');
+    if (localStorage.getItem('crossfade_duration')) {
+      crossfadeInput.value = localStorage.getItem('crossfade_duration');
+    }
+    crossfadeInput.onchange = () => {
+      localStorage.setItem('crossfade_duration', crossfadeInput.value);
+    };
     renderQueue();
   </script>
 </body>
