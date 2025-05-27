@@ -2,12 +2,15 @@ import os
 from flask import Flask, render_template, send_from_directory
 from flask_socketio import SocketIO, emit
 
-# Create Flask app
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'replace-with-your-secret'
+# Pull SECRET_KEY from Heroku’s config; fall back to random if unset.
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or os.urandom(24)
 
-# Initialize Socket.IO (no async_mode override so it auto-picks gevent)
-socketio = SocketIO(app)
+# Use Redis (REDIS_URL) as the message queue so all Gunicorn workers see every event.
+redis_url = os.environ.get('REDIS_URL')  # Heroku sets this for you
+socketio = SocketIO(app, message_queue=redis_url)
+
+
 
 # In-memory polls example (if you use it)
 polls = {}
