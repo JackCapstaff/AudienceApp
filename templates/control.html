@@ -4,13 +4,10 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Control Panel</title>
-
-  <!-- 1) Load a matching Socket.IO v4 client from CDN -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.min.js" integrity="sha512-N5JbZMETkl+0SZh5l8OA2VxSfF120owfQyy54iAXTJIKuqAn3A9TrNz1ypB55o8aSU5MxaodEgv74wGUvgUynQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-
-
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.min.js"
+          integrity="sha512-N5JbZMETkl+0SZh5l8OA2VxSfF120owfQyy54iAXTJIKuqAn3A9TrNz1ypB55o8aSU5MxaodEgv74wGUvgUynQ=="
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
-
   <style>
     body { font-family: sans-serif; padding:1rem; }
     h1 { margin-top: 0; }
@@ -19,53 +16,33 @@
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(100px,1fr));
       gap:0.5rem;
-      margin: 0.5rem 0;
-      border:1px solid #ccc;
-      padding:0.5rem;
-      min-height: 120px;
+      margin: 0.5rem 0; border:1px solid #ccc; padding:0.5rem; min-height: 120px;
     }
     .asset-tile, .queue-tile {
-      position: relative;
-      cursor: grab;
-      border:2px solid transparent;
-      border-radius:6px;
-      overflow:hidden;
-      background:#111;
+      position: relative; cursor: grab; border:2px solid transparent; border-radius:6px; overflow:hidden; background:#111;
     }
-    .queue-tile.current {
-      border-color:#007BFF;
-    }
-    .asset-tile img, .asset-tile video,
-    .queue-tile img, .queue-tile video {
+    .queue-tile.current { border-color:#007BFF; }
+    .asset-tile img, .asset-tile video, .queue-tile img, .queue-tile video {
       width:100%; height:auto; object-fit:contain;
     }
     .tile-label {
-      position:absolute; bottom:2px; left:2px;
-      background:rgba(0,0,0,0.6); color:white;
+      position:absolute; bottom:2px; left:2px; background:rgba(0,0,0,0.6); color:white;
       padding:1px 4px; font-size:0.75rem;
     }
     #send-options, #queue-controls { margin:0.5rem 0; }
     #send-options label, #queue-controls button { margin-right:0.5rem; }
     #preview-container, #current-audience-container {
-      border: 1px solid #ccc;
-      padding: 0.5rem;
-      margin-bottom: 0.5rem;
-      width: 50%; /* Take up 50% of the available space */
-      box-sizing: border-box; /* Include padding and border in the width */
+      border: 1px solid #ccc; padding: 0.5rem; margin-bottom: 0.5rem; width: 50%; box-sizing: border-box;
     }
-
     #preview-area {
-        display: flex; /* Use flexbox to arrange containers side by side */
-        justify-content: space-between; /* Add space between the containers */
-        width: 100%;
+      display: flex; justify-content: space-between; width: 100%;
     }
-
-    #current-audience-img, #current-audience-video,
-    #preview-img, #preview-video {
-      max-width: 100%;
-      display: none; /* Initially hidden */
+    #current-audience-img, #current-audience-video, #preview-img, #preview-video {
+      max-width: 100%; display: none;
     }
     #media-controls { margin-top: 1rem; }
+    #media-scrubber { width: 220px; vertical-align: middle; }
+    #media-time { font-family: monospace; margin-left: 0.4em; }
   </style>
 </head>
 <body>
@@ -112,52 +89,43 @@
     <button onclick="sendCurrent()">Send Current</button>
   </div>
 
-    <div id="queue-presets">
-      <button id="save-preset-button">Save Preset</button>
-      <button id="load-preset-button">Load Preset</button>
-    </div>
+  <div id="queue-presets">
+    <button id="save-preset-button">Save Preset</button>
+    <button id="load-preset-button">Load Preset</button>
+  </div>
 
   <div id="media-controls">
     <button id="play-pause-button">Play/Pause</button>
     <label for="playback-speed">Playback Speed:</label>
     <input type="number" id="playback-speed" min="0.25" max="2.0" step="0.25" value="1.0">
+    <input type="range" id="media-scrubber" min="0" max="100" step="0.1" value="0">
+    <span id="media-time">00:00 / 00:00</span>
   </div>
 
   <div id="preview-area">
-      <div id="current-audience-container">
-        <h2>Current Audience View</h2>
-        <img id="current-audience-img" alt="Current Audience Slide"/>
-        <video id="current-audience-video" controls>
-          <source id="current-audience-source" src="" type="video/mp4">
-        </video>
-      </div>
-
-      <div id="preview-container">
-        <h2>Preview</h2>
-        <img  id="preview-img" alt="Slide preview"/>
-        <video id="preview-video" controls>
-          <source id="preview-source" src="" type="video/mp4">
-        </video>
-      </div>
+    <div id="current-audience-container">
+      <h2>Current Audience View</h2>
+      <img id="current-audience-img" alt="Current Audience Slide"/>
+      <video id="current-audience-video" controls>
+        <source id="current-audience-source" src="" type="video/mp4">
+      </video>
+    </div>
+    <div id="preview-container">
+      <h2>Preview</h2>
+      <img id="preview-img" alt="Slide preview"/>
+      <video id="preview-video" controls>
+        <source id="preview-source" src="" type="video/mp4">
+      </video>
+    </div>
   </div>
 
   <script>
-    // --- 1. Setup Socket.IO client + debug ---
-    const socket = io({
-    transports: ['websocket'],
-    upgrade: false,
-    secure: true
-    });
-    console.log("🔗 socket.io client loaded (ws only)");
+    // --- Socket.IO setup ---
+    const socket = io({ transports: ['websocket'], upgrade: false, secure: true });
+    socket.on("connect", () => { console.log("🟢 socket connected, id=", socket.id); });
+    socket.on("connect_error", (err) => { console.error("❌ Socket connect_error:", err); });
 
-    socket.on("connect", () => {
-      console.log("🟢 socket connected, id=", socket.id);
-    });
-    socket.on("connect_error", (err) => {
-      console.error("❌ Socket connect_error:", err);
-    });
-
-    // --- 2. Drag & Drop Queue ---
+    // --- Drag & Drop Queue ---
     const tiles = document.querySelectorAll('.asset-tile');
     const queueEl = document.getElementById('queue');
     let queue = [], currentIdx = -1;
@@ -170,7 +138,6 @@
         }));
       });
       tile.addEventListener('click', () => {
-        console.log("📥 tile clicked (queued):", tile.dataset);
         queue.push({ type: tile.dataset.type, name: tile.dataset.name });
         renderQueue();
       });
@@ -180,7 +147,6 @@
     queueEl.addEventListener('drop', e => {
       e.preventDefault();
       const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-      console.log("📥 dropped into queue:", data);
       queue.push(data);
       renderQueue();
     });
@@ -191,10 +157,10 @@
         const div = document.createElement('div');
         div.className = 'queue-tile' + (i === currentIdx ? ' current' : '');
 
-        // Add click handler for highlighting
         div.addEventListener('click', () => {
           currentIdx = i;
-          renderQueue(); // Re-render to update highlighting
+          renderQueue();
+          previewQueueItem(item);
         });
 
         if (item.type === 'slide') {
@@ -215,38 +181,26 @@
       });
     }
 
-    // --- 3. Queue Navigation ---
+    // --- Queue Navigation ---
     function nextInQueue() {
       if (!queue.length) return alert('Queue is empty');
       currentIdx = (currentIdx+1)%queue.length;
-      console.log("➡️ nextInQueue idx=", currentIdx);
       renderQueue();
+      previewQueueItem(queue[currentIdx]);
     }
     function prevInQueue() {
       if (!queue.length) return alert('Queue is empty');
       currentIdx = (currentIdx-1+queue.length)%queue.length;
-      console.log("⬅️ prevInQueue idx=", currentIdx);
       renderQueue();
+      previewQueueItem(queue[currentIdx]);
     }
 
-    // --- 4. Direct Controls ---
-    document.getElementById('black-button').onclick = () => {
-      console.log("⚫️ Fade to Black clicked");
-      socket.emit('fade_to_black');
-    };
-    document.getElementById('placeholder-button').onclick = () => {
-      console.log("🖼️ Go to Placeholder clicked");
-      socket.emit('display_asset', {
-        type:'slide', name:'holdingslide.jpg',
-        autoplay:false, fadeIn:false
-      });
-    };
+    // --- Step by delta (legacy slide mode) ---
     function step(delta) {
-      console.log("🔢 step slides by", delta);
       socket.emit('change_slide', { index:delta });
     }
 
-    // --- 5. Send Current Asset ---
+    // --- Send Current Asset to Audience ---
     function sendCurrent() {
       if (currentIdx < 0 || currentIdx >= queue.length) {
         return alert('Please queue and select an asset first.');
@@ -257,27 +211,6 @@
       const fadeOut = document.getElementById('fadeout-checkbox').checked;
       const fadeIn  = document.getElementById('fadein-checkbox').checked;
       const autoplay= document.getElementById('autoplay-checkbox').checked;
-      console.log("🚀 sendAsset", asset, { fadeOut, fadeIn, autoplay });
-
-      const currentAudienceImg = document.getElementById('current-audience-img');
-      const currentAudienceVid = document.getElementById('current-audience-video');
-      const currentAudienceSrc = document.getElementById('current-audience-source');
-
-      if (asset.type === 'slide') {
-        currentAudienceVid.style.display = 'none';
-        currentAudienceImg.src = `/static/slides/${asset.name}`;
-        currentAudienceImg.style.display = 'block';
-      } else if (asset.type === 'video') {
-        currentAudienceImg.style.display = 'none';
-        currentAudienceSrc.src = `/static/media/${asset.name}`;
-        currentAudienceVid.load();
-        currentAudienceVid.style.display = 'block';
-        currentAudienceVid.muted = true; // Or false, as needed
-        if (autoplay) {
-            currentAudienceVid.play().catch(console.warn)
-        }
-      }
-
       if (fadeOut) {
         socket.emit('fade_to_black');
         setTimeout(() => {
@@ -288,65 +221,117 @@
       }
     }
 
-    // --- 6. Preview Queue Item on Click ---
+    // --- Preview ---
     const previewImg   = document.getElementById('preview-img');
     const previewVid   = document.getElementById('preview-video');
     const previewSrc   = document.getElementById('preview-source');
-    queueEl.addEventListener('click', e => {
-    const tile = e.target.closest('.queue-tile'); // Find the closest queue tile
-    if (!tile) return; // If not a queue tile, exit
-
-    e.preventDefault(); // Prevent default behavior (like text selection)
-
-    const idx = Array.from(queueEl.children).indexOf(tile);
-    if (idx < 0) return;
-    const item = queue[idx];
-    console.log("👀 previewing queue item:", item);
-    if (item.type === 'slide') {
+    function previewQueueItem(item) {
+      if (item.type === 'slide') {
         previewVid.style.display = 'none';
         previewImg.src = `/static/slides/${item.name}`;
         previewImg.style.display = 'block';
-    } else {
+      } else {
         previewImg.style.display = 'none';
         previewSrc.src = `/static/media/${item.name}`;
         previewVid.load();
         previewVid.style.display = 'block';
+      }
     }
-});
 
-    // --- 7. Media Controls ---
-    document.getElementById('play-pause-button').addEventListener('click', () => {
-      socket.emit('play_pause_video');
-    });
+    // --- Live Audience View Reflection ---
+    socket.on('sync_state', updateAudiencePanel);
+    socket.on('display_asset', updateAudiencePanel);
+    socket.on('play_pause_video', updateAudiencePanel);
+    socket.on('set_playback_speed', asset => updateAudiencePanelLast(asset));
+    socket.on('seek_video', asset => updateAudiencePanelLast(asset));
 
-    document.getElementById('playback-speed').addEventListener('change', (event) => {
-      const speed = parseFloat(event.target.value);
+    function updateAudiencePanel(asset) {
+      if (!asset) return socket.emit("sync_state_request", null);
+      updateAudiencePanelLast(asset);
+    }
+
+    let lastAssetForAudience = null;
+    function updateAudiencePanelLast(asset) {
+      lastAssetForAudience = asset;
+      const currentAudienceImg = document.getElementById('current-audience-img');
+      const currentAudienceVid = document.getElementById('current-audience-video');
+      const currentAudienceSrc = document.getElementById('current-audience-source');
+      if (asset.type === 'slide') {
+        currentAudienceVid.style.display = 'none';
+        currentAudienceImg.src = `/static/slides/${asset.name}`;
+        currentAudienceImg.style.display = 'block';
+      } else if (asset.type === 'video') {
+        currentAudienceImg.style.display = 'none';
+        currentAudienceSrc.src = `/static/media/${asset.name}`;
+        currentAudienceVid.load();
+        currentAudienceVid.style.display = 'block';
+        currentAudienceVid.muted = true;
+        currentAudienceVid.onloadedmetadata = function() {
+          currentAudienceVid.currentTime = asset.video_time || 0;
+          currentAudienceVid.playbackRate = asset.video_speed || 1.0;
+          if (!asset.video_paused || asset.autoplay) {
+            currentAudienceVid.play().catch(()=>{});
+          } else {
+            currentAudienceVid.pause();
+          }
+        };
+      }
+    }
+
+    // --- Media Controls: Play/Pause, Speed, Scrub ---
+    const playPauseBtn = document.getElementById('play-pause-button');
+    const speedInput = document.getElementById('playback-speed');
+    const scrubber = document.getElementById('media-scrubber');
+    const timeLabel = document.getElementById('media-time');
+    const currentAudienceVid = document.getElementById('current-audience-video');
+
+    playPauseBtn.onclick = () => socket.emit('play_pause_video');
+    speedInput.onchange = () => {
+      const speed = parseFloat(speedInput.value);
       socket.emit('set_playback_speed', { speed: speed });
-    });
+    };
 
-    // --- 8. Sortable Queue ---
+    let ignoreScrubEvent = false;
+    currentAudienceVid.addEventListener('timeupdate', () => {
+      ignoreScrubEvent = true;
+      scrubber.value = currentAudienceVid.currentTime;
+      timeLabel.textContent = formatTime(currentAudienceVid.currentTime) + ' / ' +
+        formatTime(currentAudienceVid.duration);
+      ignoreScrubEvent = false;
+    });
+    currentAudienceVid.addEventListener('durationchange', () => {
+      scrubber.max = currentAudienceVid.duration;
+    });
+    scrubber.addEventListener('input', () => {
+      if (ignoreScrubEvent) return;
+      socket.emit('seek_video', { time: parseFloat(scrubber.value) });
+    });
+    function formatTime(sec) {
+      if (isNaN(sec)) return "00:00";
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+    }
+
+    // --- Sortable Queue ---
     new Sortable(queueEl, {
       animation: 150,
       onEnd: function (evt) {
-        // Update the queue array based on the new order
         const temp = queue[evt.oldIndex];
         queue.splice(evt.oldIndex, 1);
         queue.splice(evt.newIndex, 0, temp);
-
-        // Update currentIdx if necessary
         if (currentIdx === evt.oldIndex) {
-            currentIdx = evt.newIndex;
+          currentIdx = evt.newIndex;
         } else if (evt.oldIndex < currentIdx && evt.newIndex >= currentIdx) {
-            currentIdx--;
+          currentIdx--;
         } else if (evt.oldIndex > currentIdx && evt.newIndex <= currentIdx) {
-            currentIdx++;
+          currentIdx++;
         }
-
-        renderQueue(); // Re-render the queue
+        renderQueue();
       }
     });
 
-        // --- 9. Save and Load Queue Presets ---
+    // --- Presets ---
     document.getElementById('save-preset-button').addEventListener('click', () => {
       const presetName = prompt("Enter a name for the preset:");
       if (presetName) {
@@ -361,7 +346,7 @@
         const savedQueue = localStorage.getItem(`queue_preset_${presetName}`);
         if (savedQueue) {
           queue = JSON.parse(savedQueue);
-          currentIdx = -1; // Reset selected index
+          currentIdx = -1;
           renderQueue();
           alert(`Preset "${presetName}" loaded!`);
         } else {
@@ -369,6 +354,20 @@
         }
       }
     });
+
+    // --- Black/Placeholder ---
+    document.getElementById('black-button').onclick = () => {
+      socket.emit('fade_to_black');
+    };
+    document.getElementById('placeholder-button').onclick = () => {
+      socket.emit('display_asset', {
+        type:'slide', name:'holdingslide.jpg',
+        autoplay:false, fadeIn:false
+      });
+    };
+
+    // --- INIT ---
+    renderQueue();
   </script>
 </body>
 </html>

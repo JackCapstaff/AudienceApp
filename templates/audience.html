@@ -4,8 +4,9 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Audience View</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.min.js" integrity="sha512-N5JbZMETkl+0SZh5l8OA2VxSfF120owfQyy54iAXTJIKuqAn3A9TrNz1ypB55o8aSU5MxaodEgv74wGUvgUynQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.min.js"
+          integrity="sha512-N5JbZMETkl+0SZh5l8OA2VxSfF120owfQyy54iAXTJIKuqAn3A9TrNz1ypB55o8aSU5MxaodEgv74wGUvgUynQ=="
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <style>
     html, body {
       margin: 0; padding: 0; height: 100%; overflow: hidden;
@@ -24,18 +25,13 @@
       top: 0; left: 0;
       width: 100vw; height: 100vh;
       background: black;
-      display: block; /* Changed from 'none' */
+      display: block;
       opacity: 0;
       transition: opacity 0.8s ease;
       z-index: 5;
     }
-    #black-overlay.blackened {
-      opacity: 1;
-    }
-    #black-overlay.fade-in {
-        opacity: 1;
-        transition: opacity 0.05s ease; /* Short transition */
-    }
+    #black-overlay.blackened { opacity: 1; }
+    #black-overlay.fade-in { opacity: 1; transition: opacity 0.05s ease; }
     #poll {
       position: absolute; top: 0; left: 0;
       width: 100vw; height: 100vh;
@@ -59,8 +55,7 @@
   <img id="slide-img" src="/static/slides/holdingslide.jpg" alt="Holding Slide"/>
 
   <!-- Video player -->
-  <video id="media-player"
-         playsinline webkit-playsinline controls>
+  <video id="media-player" playsinline webkit-playsinline>
     <source id="media-source" src="" type="video/mp4">
     Your browser doesn’t support HTML5 video.
   </video>
@@ -75,23 +70,12 @@
   </div>
 
   <script>
-    
-
     const socket = io({
-    transports: ['websocket'],
-    upgrade: false,
-    secure: true
-    });
-    console.log("🔗 socket.io client loaded (ws only)");
-
-    socket.on("connect", () => {
-      console.log("🟢 socket connected, id=", socket.id);
-    });
-    socket.on("connect_error", (err) => {
-      console.error("❌ Socket connect_error:", err);
+      transports: ['websocket'],
+      upgrade: false,
+      secure: true
     });
 
-    
     const slideImg     = document.getElementById('slide-img');
     const mediaPlayer  = document.getElementById('media-player');
     const mediaSource  = document.getElementById('media-source');
@@ -100,96 +84,50 @@
     const pollQuestion = document.getElementById('poll-question');
     const pollOptions  = document.getElementById('poll-options');
 
-    // 1) Slide-paging helper
-    function showSlide(index) {
-      // hide video & poll
+    // === Live sync for ALL late joiners and updates ===
+    // This function sets up the correct view (slide/video) using ALL state fields.
+    function updateView(asset) {
       pollOverlay.style.display = 'none';
-      mediaPlayer.pause(); mediaPlayer.currentTime = 0;
-      mediaPlayer.style.display = 'none';
-
-      slideImg.style.display = 'block';
-      slideImg.onerror = null;
-
-      // try jpg then png
-      const jpg = `/static/slides/slide${index+1}.jpg`;
-      slideImg.src = jpg;
-      slideImg.onerror = () => {
-        slideImg.onerror = null;
-        slideImg.src = `/static/slides/slide${index+1}.png`;
-      };
+      blackOverlay.classList.remove('blackened');
+      if (asset.type === 'slide') {
+        // Show slide
+        mediaPlayer.pause(); mediaPlayer.style.display = 'none';
+        slideImg.style.display = 'block';
+        slideImg.src = `/static/slides/${asset.name}`;
+      } else if (asset.type === 'video') {
+        slideImg.style.display = 'none';
+        mediaSource.src = `/static/media/${asset.name}`;
+        mediaPlayer.load();
+        mediaPlayer.style.display = 'block';
+        mediaPlayer.onloadedmetadata = function() {
+          // Apply time/paused/speed correctly, robust for late joiners!
+          mediaPlayer.currentTime = asset.video_time || 0;
+          mediaPlayer.playbackRate = asset.video_speed || 1.0;
+          if (!asset.video_paused || asset.autoplay) {
+            mediaPlayer.play().catch(()=>{});
+          } else {
+            mediaPlayer.pause();
+          }
+        };
+      }
     }
-    socket.on('slide_update', ({index}) => showSlide(index));
 
-    // 2) Fade-to-black
+    // On connect, get FULL state for late joiners
+    socket.on("connect", () => {
+      // Nothing to do: server will send 'sync_state'
+    });
+    socket.on("sync_state", updateView);
+    socket.on("display_asset", updateView);
+
+    // Fade-to-black support
     socket.on('fade_to_black', () => {
       blackOverlay.classList.add('blackened');
     });
 
-    // 3) Fade-in after black (used by display_asset)
-    function revealFade() {
-      blackOverlay.style.opacity = '0';
-      blackOverlay.addEventListener('transitionend', () => {
-        blackOverlay.style.display = 'none';
-      }, { once: true });
-    }
-
-    // 4) Generic asset handler
-    socket.on('display_asset', ({ type, name, autoplay, fadeIn }) => {
-      pollOverlay.style.display = 'none';
-
-      // New code: Remove the 'blackened' class if it exists
-      blackOverlay.classList.remove('blackened');
-
-      if (type === 'slide') {
-        mediaPlayer.pause();
-        mediaPlayer.style.display = 'none';
-
-        slideImg.src = `/static/slides/${name}`;
-        slideImg.style.display = 'block';
-
-        if (fadeIn) {
-          blackOverlay.classList.add('fade-in'); // Add a class for fading in
-          setTimeout(() => {
-            blackOverlay.classList.remove('fade-in');
-          }, 50);
-        }
-      } else if (type === 'video') {
-        slideImg.style.display = 'none';
-
-        mediaSource.src = `/static/media/${name}`;
-        mediaPlayer.load();
-        mediaPlayer.style.display = 'block';
-
-        if (fadeIn) {
-          blackOverlay.classList.add('fade-in'); // Add a class for fading in
-          setTimeout(() => {
-            blackOverlay.classList.remove('fade-in');
-            if (autoplay) {
-              mediaPlayer.muted = true;
-              mediaPlayer.play().catch(console.warn);
-            }
-          }, 50);
-        } else if (autoplay) {
-          mediaPlayer.muted = true;
-          mediaPlayer.play().catch(console.warn);
-        } else {
-          mediaPlayer.muted = false;
-        }
-      }
-    });
-
-    // 5) Stop media (if you emit this)
-    socket.on('stop_media', () => {
-      mediaPlayer.pause(); mediaPlayer.currentTime = 0;
-      mediaPlayer.style.display = 'none';
-      slideImg.style.display = 'block';
-    });
-
-    // 6) Polling
+    // Poll support (unchanged from original)
     socket.on('new_poll', p => {
       slideImg.style.display = 'none';
       mediaPlayer.pause(); mediaPlayer.style.display = 'none';
-
       pollQuestion.textContent = p.question;
       pollOptions.innerHTML = '';
       Object.keys(p.options).forEach(opt => {
@@ -209,31 +147,62 @@
       slideImg.style.display = 'block';
     });
 
-    // 7) Trigger play for an already‐loaded video
-    socket.on('play_pause_video', () => {
+    // Play/Pause (from server only)
+    socket.on('play_pause_video', asset => {
       if (mediaPlayer.style.display === 'block') {
-        if (mediaPlayer.readyState >= 2) { // Check if metadata is loaded
-          if (mediaPlayer.paused) {
-            mediaPlayer.play().catch(console.warn);
-          } else {
-            mediaPlayer.pause();
-          }
+        mediaPlayer.currentTime = asset.video_time || 0;
+        mediaPlayer.playbackRate = asset.video_speed || 1.0;
+        if (!asset.video_paused) {
+          mediaPlayer.play().catch(()=>{});
         } else {
-          // If metadata is not loaded, wait for it
-          mediaPlayer.addEventListener('loadedmetadata', () => {
-            if (mediaPlayer.paused) {
-              mediaPlayer.play().catch(console.warn);
-            } else {
-              mediaPlayer.pause();
-            }
-          }, { once: true }); // Only listen once
+          mediaPlayer.pause();
         }
       }
     });
 
-    socket.on('set_playback_speed', (data) => {
-      mediaPlayer.playbackRate = data.speed;
+    // Set playback speed (from server only)
+    socket.on('set_playback_speed', ({speed}) => {
+      mediaPlayer.playbackRate = speed;
     });
+
+    // Seek (from server only)
+    socket.on('seek_video', ({time}) => {
+      if (mediaPlayer.style.display === 'block') {
+        mediaPlayer.currentTime = time;
+      }
+    });
+
+    // Stop media (if you emit this)
+    socket.on('stop_media', () => {
+      mediaPlayer.pause(); mediaPlayer.currentTime = 0;
+      mediaPlayer.style.display = 'none';
+      slideImg.style.display = 'block';
+    });
+
+    // Existing slide paging (legacy, if still used)
+    function showSlide(index) {
+      pollOverlay.style.display = 'none';
+      mediaPlayer.pause(); mediaPlayer.currentTime = 0;
+      mediaPlayer.style.display = 'none';
+      slideImg.style.display = 'block';
+      slideImg.onerror = null;
+      // try jpg then png
+      const jpg = `/static/slides/slide${index+1}.jpg`;
+      slideImg.src = jpg;
+      slideImg.onerror = () => {
+        slideImg.onerror = null;
+        slideImg.src = `/static/slides/slide${index+1}.png`;
+      };
+    }
+    socket.on('slide_update', ({index}) => showSlide(index));
+
+    // (Unused) fade-in reveal, if you re-enable this
+    function revealFade() {
+      blackOverlay.style.opacity = '0';
+      blackOverlay.addEventListener('transitionend', () => {
+        blackOverlay.style.display = 'none';
+      }, { once: true });
+    }
   </script>
 </body>
 </html>
