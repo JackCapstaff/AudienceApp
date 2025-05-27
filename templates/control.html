@@ -7,10 +7,12 @@
 
   <!-- 1) Load a matching Socket.IO v4 client from CDN -->
   <script
-    src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.0/socket.io.min.js"
-    integrity="sha512-+FGF7mOcNq8dkKKWfkpEcJ8/0kgaSqU5unas47gfYXZxslWoUWg1I1l0sT/u5X8iO9VZrKxQ6AzlvbC0l8VRTg=="
+    src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.8.1/socket.io.min.js"
+    integrity="sha512-8ExARjWWkIllMlNzVg7JKq9RKWPlJABQUNq6YvAjE/HobctjH/NA+bSiDMDvouBVjp4Wwnf1VP1OEv7Zgjtuxw=="
     crossorigin="anonymous" referrerpolicy="no-referrer">
   </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
 
   <style>
     body { font-family: sans-serif; padding:1rem; }
@@ -33,7 +35,7 @@
       overflow:hidden;
       background:#111;
     }
-    .asset-tile.selected, .queue-tile.current {
+    .queue-tile.current {
       border-color:#007BFF;
     }
     .asset-tile img, .asset-tile video,
@@ -47,8 +49,26 @@
     }
     #send-options, #queue-controls { margin:0.5rem 0; }
     #send-options label, #queue-controls button { margin-right:0.5rem; }
-    #preview-container { border:1px solid #ccc; padding:0.5rem; }
-    #preview-img, #preview-video { max-width:100%; display:none; }
+    #preview-container, #current-audience-container {
+      border: 1px solid #ccc;
+      padding: 0.5rem;
+      margin-bottom: 0.5rem;
+      width: 50%; /* Take up 50% of the available space */
+      box-sizing: border-box; /* Include padding and border in the width */
+    }
+
+    #preview-area {
+        display: flex; /* Use flexbox to arrange containers side by side */
+        justify-content: space-between; /* Add space between the containers */
+        width: 100%;
+    }
+
+    #current-audience-img, #current-audience-video,
+    #preview-img, #preview-video {
+      max-width: 100%;
+      display: none; /* Initially hidden */
+    }
+    #media-controls { margin-top: 1rem; }
   </style>
 </head>
 <body>
@@ -95,18 +115,39 @@
     <button onclick="sendCurrent()">Send Current</button>
   </div>
 
-  <div id="preview-container">
-    <h2>Preview</h2>
-    <img  id="preview-img" alt="Slide preview"/>
-    <video id="preview-video" controls>
-      <source id="preview-source" src="" type="video/mp4">
-    </video>
+    <div id="queue-presets">
+      <button id="save-preset-button">Save Preset</button>
+      <button id="load-preset-button">Load Preset</button>
+    </div>
+
+  <div id="media-controls">
+    <button id="play-pause-button">Play/Pause</button>
+    <label for="playback-speed">Playback Speed:</label>
+    <input type="number" id="playback-speed" min="0.25" max="2.0" step="0.25" value="1.0">
+  </div>
+
+  <div id="preview-area">
+      <div id="current-audience-container">
+        <h2>Current Audience View</h2>
+        <img id="current-audience-img" alt="Current Audience Slide"/>
+        <video id="current-audience-video" controls>
+          <source id="current-audience-source" src="" type="video/mp4">
+        </video>
+      </div>
+
+      <div id="preview-container">
+        <h2>Preview</h2>
+        <img  id="preview-img" alt="Slide preview"/>
+        <video id="preview-video" controls>
+          <source id="preview-source" src="" type="video/mp4">
+        </video>
+      </div>
   </div>
 
   <script>
     // --- 1. Setup Socket.IO client + debug ---
     const socket = io();
-    console.log("⚡️ socket.io client loaded, protocol:", io.protocol);
+    console.log("🔗 socket.io client loaded");
     socket.on("connect", () => console.log("✅ socket connected, id=", socket.id));
     socket.on("connect_error", err => console.error("❌ socket connect_error:", err));
 
@@ -140,18 +181,29 @@
 
     function renderQueue() {
       queueEl.innerHTML = '';
-      queue.forEach((item,i) => {
+      queue.forEach((item, i) => {
         const div = document.createElement('div');
-        div.className = 'queue-tile' + (i===currentIdx?' current':'');
-        if (item.type==='slide') {
+        div.className = 'queue-tile' + (i === currentIdx ? ' current' : '');
+
+        // Add click handler for highlighting
+        div.addEventListener('click', () => {
+          currentIdx = i;
+          renderQueue(); // Re-render to update highlighting
+        });
+
+        if (item.type === 'slide') {
           const img = document.createElement('img');
-          img.src = `/static/slides/${item.name}`; div.appendChild(img);
+          img.src = `/static/slides/${item.name}`;
+          div.appendChild(img);
         } else {
           const vid = document.createElement('video');
-          vid.muted=true; vid.src=`/static/media/${item.name}`; div.appendChild(vid);
+          vid.muted = true;
+          vid.src = `/static/media/${item.name}`;
+          div.appendChild(vid);
         }
         const lbl = document.createElement('div');
-        lbl.className = 'tile-label'; lbl.textContent = item.name;
+        lbl.className = 'tile-label';
+        lbl.textContent = item.name;
         div.appendChild(lbl);
         queueEl.appendChild(div);
       });
@@ -163,14 +215,12 @@
       currentIdx = (currentIdx+1)%queue.length;
       console.log("➡️ nextInQueue idx=", currentIdx);
       renderQueue();
-      sendAsset(queue[currentIdx]);
     }
     function prevInQueue() {
       if (!queue.length) return alert('Queue is empty');
       currentIdx = (currentIdx-1+queue.length)%queue.length;
       console.log("⬅️ prevInQueue idx=", currentIdx);
       renderQueue();
-      sendAsset(queue[currentIdx]);
     }
 
     // --- 4. Direct Controls ---
@@ -192,7 +242,7 @@
 
     // --- 5. Send Current Asset ---
     function sendCurrent() {
-      if (currentIdx<0||currentIdx>=queue.length) {
+      if (currentIdx < 0 || currentIdx >= queue.length) {
         return alert('Please queue and select an asset first.');
       }
       sendAsset(queue[currentIdx]);
@@ -202,6 +252,25 @@
       const fadeIn  = document.getElementById('fadein-checkbox').checked;
       const autoplay= document.getElementById('autoplay-checkbox').checked;
       console.log("🚀 sendAsset", asset, { fadeOut, fadeIn, autoplay });
+
+      const currentAudienceImg = document.getElementById('current-audience-img');
+      const currentAudienceVid = document.getElementById('current-audience-video');
+      const currentAudienceSrc = document.getElementById('current-audience-source');
+
+      if (asset.type === 'slide') {
+        currentAudienceVid.style.display = 'none';
+        currentAudienceImg.src = `/static/slides/${asset.name}`;
+        currentAudienceImg.style.display = 'block';
+      } else if (asset.type === 'video') {
+        currentAudienceImg.style.display = 'none';
+        currentAudienceSrc.src = `/static/media/${asset.name}`;
+        currentAudienceVid.load();
+        currentAudienceVid.style.display = 'block';
+        currentAudienceVid.muted = true; // Or false, as needed
+        if (autoplay) {
+            currentAudienceVid.play().catch(console.warn)
+        }
+      }
 
       if (fadeOut) {
         socket.emit('fade_to_black');
@@ -218,20 +287,80 @@
     const previewVid   = document.getElementById('preview-video');
     const previewSrc   = document.getElementById('preview-source');
     queueEl.addEventListener('click', e => {
-      const idx = Array.from(queueEl.children)
-                       .indexOf(e.target.closest('.queue-tile'));
-      if (idx<0) return;
-      const item = queue[idx];
-      console.log("👀 previewing queue item:", item);
-      if (item.type==='slide') {
-        previewVid.style.display='none';
-        previewImg.src=`/static/slides/${item.name}`;
-        previewImg.style.display='block';
-      } else {
-        previewImg.style.display='none';
-        previewSrc.src=`/static/media/${item.name}`;
+    const tile = e.target.closest('.queue-tile'); // Find the closest queue tile
+    if (!tile) return; // If not a queue tile, exit
+
+    e.preventDefault(); // Prevent default behavior (like text selection)
+
+    const idx = Array.from(queueEl.children).indexOf(tile);
+    if (idx < 0) return;
+    const item = queue[idx];
+    console.log("👀 previewing queue item:", item);
+    if (item.type === 'slide') {
+        previewVid.style.display = 'none';
+        previewImg.src = `/static/slides/${item.name}`;
+        previewImg.style.display = 'block';
+    } else {
+        previewImg.style.display = 'none';
+        previewSrc.src = `/static/media/${item.name}`;
         previewVid.load();
-        previewVid.style.display='block';
+        previewVid.style.display = 'block';
+    }
+});
+
+    // --- 7. Media Controls ---
+    document.getElementById('play-pause-button').addEventListener('click', () => {
+      socket.emit('play_pause_video');
+    });
+
+    document.getElementById('playback-speed').addEventListener('change', (event) => {
+      const speed = parseFloat(event.target.value);
+      socket.emit('set_playback_speed', { speed: speed });
+    });
+
+    // --- 8. Sortable Queue ---
+    new Sortable(queueEl, {
+      animation: 150,
+      onEnd: function (evt) {
+        // Update the queue array based on the new order
+        const temp = queue[evt.oldIndex];
+        queue.splice(evt.oldIndex, 1);
+        queue.splice(evt.newIndex, 0, temp);
+
+        // Update currentIdx if necessary
+        if (currentIdx === evt.oldIndex) {
+            currentIdx = evt.newIndex;
+        } else if (evt.oldIndex < currentIdx && evt.newIndex >= currentIdx) {
+            currentIdx--;
+        } else if (evt.oldIndex > currentIdx && evt.newIndex <= currentIdx) {
+            currentIdx++;
+        }
+
+        renderQueue(); // Re-render the queue
+      }
+    });
+
+        // --- 9. Save and Load Queue Presets ---
+    document.getElementById('save-preset-button').addEventListener('click', () => {
+      const presetName = prompt("Enter a name for the preset:");
+      if (presetName) {
+        localStorage.setItem(`queue_preset_${presetName}`, JSON.stringify(queue));
+        alert(`Preset "${presetName}" saved!`);
+      }
+    });
+
+    document.getElementById('load-preset-button').addEventListener('click', () => {
+      const presetName = prompt("Enter the name of the preset to load:");
+      if (presetName) {
+        const savedQueue = localStorage.getItem(`queue_preset_${presetName}`);
+        if (savedQueue) {
+          queue = JSON.parse(savedQueue);
+          currentIdx = -1; // Reset selected index
+          renderQueue();
+          alert(`Preset "${presetName}" loaded!`);
+        } else {
+          alert(`Preset "${presetName}" not found.`);
+        }
       }
     });
   </script>

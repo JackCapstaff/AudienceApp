@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Audience View</title>
   <script
-    src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.0/socket.io.min.js"
-    integrity="sha512-+FGF7mOcNq8dkKKWfkpEcJ8/0kgaSqU5unas47gfYXZxslWoUWg1I1l0sT/u5X8iO9VZrKxQ6AzlvbC0l8VRTg=="
+    src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.8.1/socket.io.min.js"
+    integrity="sha512-8ExARjWWkIllMlNzVg7JKq9RKWPlJABQUNq6YvAjE/HobctjH/NA+bSiDMDvouBVjp4Wwnf1VP1OEv7Zgjtuxw=="
     crossorigin="anonymous" referrerpolicy="no-referrer">
   </script>
   <style>
@@ -27,10 +27,17 @@
       top: 0; left: 0;
       width: 100vw; height: 100vh;
       background: black;
-      display: none;
+      display: block; /* Changed from 'none' */
       opacity: 0;
       transition: opacity 0.8s ease;
       z-index: 5;
+    }
+    #black-overlay.blackened {
+      opacity: 1;
+    }
+    #black-overlay.fade-in {
+        opacity: 1;
+        transition: opacity 0.05s ease; /* Short transition */
     }
     #poll {
       position: absolute; top: 0; left: 0;
@@ -72,7 +79,7 @@
 
   <script>
     const socket       = io();
-    console.log("🔗 socket.io client version:", io.protocol, "connecting to", window.location.origin);
+    console.log("🔗 socket.io client loaded");
     socket.on("connect", () => {
       console.log("🟢 socket connected, id=", socket.id);
     });
@@ -111,13 +118,7 @@
 
     // 2) Fade-to-black
     socket.on('fade_to_black', () => {
-      // ensure we start transparent
-      blackOverlay.style.display = 'block';
-      blackOverlay.style.opacity = '0';
-      // next frame: animate to opaque
-      requestAnimationFrame(() => {
-        blackOverlay.style.opacity = '1';
-      });
+      blackOverlay.classList.add('blackened');
     });
 
     // 3) Fade-in after black (used by display_asset)
@@ -129,21 +130,25 @@
     }
 
     // 4) Generic asset handler
-    socket.on('display_asset', ({type, name, autoplay, fadeIn}) => {
+    socket.on('display_asset', ({ type, name, autoplay, fadeIn }) => {
       pollOverlay.style.display = 'none';
 
+      // New code: Remove the 'blackened' class if it exists
+      blackOverlay.classList.remove('blackened');
+
       if (type === 'slide') {
-        mediaPlayer.pause(); mediaPlayer.style.display = 'none';
+        mediaPlayer.pause();
+        mediaPlayer.style.display = 'none';
 
         slideImg.src = `/static/slides/${name}`;
         slideImg.style.display = 'block';
 
         if (fadeIn) {
-          blackOverlay.style.display = 'block';
-          blackOverlay.style.opacity = '1';
-          setTimeout(revealFade, 50);
+          blackOverlay.classList.add('fade-in'); // Add a class for fading in
+          setTimeout(() => {
+            blackOverlay.classList.remove('fade-in');
+          }, 50);
         }
-
       } else if (type === 'video') {
         slideImg.style.display = 'none';
 
@@ -152,10 +157,9 @@
         mediaPlayer.style.display = 'block';
 
         if (fadeIn) {
-          blackOverlay.style.display = 'block';
-          blackOverlay.style.opacity = '1';
+          blackOverlay.classList.add('fade-in'); // Add a class for fading in
           setTimeout(() => {
-            revealFade();
+            blackOverlay.classList.remove('fade-in');
             if (autoplay) {
               mediaPlayer.muted = true;
               mediaPlayer.play().catch(console.warn);
@@ -202,10 +206,29 @@
     });
 
     // 7) Trigger play for an already‐loaded video
-    socket.on('play_video', () => {
+    socket.on('play_pause_video', () => {
       if (mediaPlayer.style.display === 'block') {
-        mediaPlayer.play().catch(console.warn);
+        if (mediaPlayer.readyState >= 2) { // Check if metadata is loaded
+          if (mediaPlayer.paused) {
+            mediaPlayer.play().catch(console.warn);
+          } else {
+            mediaPlayer.pause();
+          }
+        } else {
+          // If metadata is not loaded, wait for it
+          mediaPlayer.addEventListener('loadedmetadata', () => {
+            if (mediaPlayer.paused) {
+              mediaPlayer.play().catch(console.warn);
+            } else {
+              mediaPlayer.pause();
+            }
+          }, { once: true }); // Only listen once
+        }
       }
+    });
+
+    socket.on('set_playback_speed', (data) => {
+      mediaPlayer.playbackRate = data.speed;
     });
   </script>
 </body>

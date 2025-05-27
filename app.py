@@ -47,11 +47,16 @@ def on_fade_to_black():
     print("👂 [server] fade_to_black received")
     emit('fade_to_black', broadcast=True)
 
-# Debug handler: play video
-@socketio.on('play_video')
-def on_play_video():
-    print("👂 [server] play_video received")
-    emit('play_video', broadcast=True)
+# Media Controls
+@socketio.on('play_pause_video')
+def on_play_pause_video():
+  print("👂 [server] play_pause_video received")
+  emit('play_pause_video', broadcast=True)
+
+@socketio.on('set_playback_speed')
+def on_set_playback_speed(data):
+  print("👂 [server] set_playback_speed received:", data)
+  emit('set_playback_speed', data, broadcast=True)
 
 # Debug handler: votes (if using polls)
 @socketio.on('vote')
@@ -66,12 +71,12 @@ def favicon():
                                'favicon.ico', mimetype='image/vnd.microsoft.icon')
 
 if __name__ == '__main__':
-    # Make sure to run via `python app.py` in a terminal
-    print("⚙️  Starting SocketIO server…")
+    port = int(os.environ.get('PORT', 5000))
+    print("⚙️  Starting SocketIO server on port", port, "…")
     socketio.run(
         app,
         host='0.0.0.0',
-        port=5000,
+        port=port,
         debug=True,
         use_reloader=True
     )
