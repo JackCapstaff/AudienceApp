@@ -84,27 +84,35 @@
     const pollQuestion = document.getElementById('poll-question');
     const pollOptions  = document.getElementById('poll-options');
 
-    // === Live sync for ALL late joiners and updates ===
-    // This function sets up the correct view (slide/video) using ALL state fields.
+    // Keep track of last asset so state updates (play/pause etc) work reliably
+    let lastAsset = {
+      type: 'slide',
+      name: 'holdingslide.jpg'
+    };
+
+    // === Main asset update function ===
     function updateView(asset) {
+      lastAsset = asset;
       pollOverlay.style.display = 'none';
       blackOverlay.classList.remove('blackened');
       if (asset.type === 'slide') {
-        // Show slide
         mediaPlayer.pause(); mediaPlayer.style.display = 'none';
         slideImg.style.display = 'block';
         slideImg.src = `/static/slides/${asset.name}`;
       } else if (asset.type === 'video') {
         slideImg.style.display = 'none';
+        mediaPlayer.onloadedmetadata = null;
         mediaSource.src = `/static/media/${asset.name}`;
         mediaPlayer.load();
         mediaPlayer.style.display = 'block';
         mediaPlayer.onloadedmetadata = function() {
-          // Apply time/paused/speed correctly, robust for late joiners!
-          mediaPlayer.currentTime = asset.video_time || 0;
-          mediaPlayer.playbackRate = asset.video_speed || 1.0;
+          let videoTime = Number(asset.video_time) || 0;
+          let videoSpeed = Number(asset.video_speed) || 1.0;
+          mediaPlayer.currentTime = videoTime;
+          mediaPlayer.playbackRate = videoSpeed;
+          mediaPlayer.muted = true; // <<--- KEY LINE!
           if (!asset.video_paused || asset.autoplay) {
-            mediaPlayer.play().catch(()=>{});
+            mediaPlayer.play().catch((err)=>{console.warn("Video play error:", err);});
           } else {
             mediaPlayer.pause();
           }
@@ -112,19 +120,61 @@
       }
     }
 
-    // On connect, get FULL state for late joiners
-    socket.on("connect", () => {
-      // Nothing to do: server will send 'sync_state'
-    });
+    function updateVideoState(assetUpdate) {
+      const asset = Object.assign({}, lastAsset, assetUpdate);
+      if (asset.type !== 'video') return;
+      if (mediaPlayer.style.display === 'block') {
+        if (typeof asset.video_time !== "undefined") {
+          mediaPlayer.currentTime = Number(asset.video_time) || 0;
+        }
+        if (typeof asset.video_speed !== "undefined") {
+          mediaPlayer.playbackRate = Number(asset.video_speed) || 1.0;
+        }
+        mediaPlayer.muted = true; // <<--- KEY LINE!
+        if (!asset.video_paused) {
+          mediaPlayer.play().catch((err)=>{console.warn("Video play error:", err);});
+        } else {
+          mediaPlayer.pause();
+        }
+      }
+    }
+
+
+    // Main events
     socket.on("sync_state", updateView);
     socket.on("display_asset", updateView);
+
+    socket.on('play_pause_video', updateVideoState);
+    socket.on('set_playback_speed', asset => {
+      // 'asset' might just be {speed}, merge into last asset for safety
+      updateVideoState(Object.assign({}, lastAsset, { video_speed: asset.speed }));
+    });
+    socket.on('seek_video', ({time}) => {
+      updateVideoState(Object.assign({}, lastAsset, { video_time: time }));
+    });
+
+    // Existing slide paging (legacy, if still used)
+    function showSlide(index) {
+      pollOverlay.style.display = 'none';
+      mediaPlayer.pause(); mediaPlayer.currentTime = 0;
+      mediaPlayer.style.display = 'none';
+      slideImg.style.display = 'block';
+      slideImg.onerror = null;
+      const jpg = `/static/slides/slide${index+1}.jpg`;
+      slideImg.src = jpg;
+      slideImg.onerror = () => {
+        slideImg.onerror = null;
+        slideImg.src = `/static/slides/slide${index+1}.png`;
+      };
+    }
+    socket.on('slide_update', ({index}) => showSlide(index));
 
     // Fade-to-black support
     socket.on('fade_to_black', () => {
       blackOverlay.classList.add('blackened');
     });
 
-    // Poll support (unchanged from original)
+    // Poll overlay unchanged
     socket.on('new_poll', p => {
       slideImg.style.display = 'none';
       mediaPlayer.pause(); mediaPlayer.style.display = 'none';
@@ -147,54 +197,12 @@
       slideImg.style.display = 'block';
     });
 
-    // Play/Pause (from server only)
-    socket.on('play_pause_video', asset => {
-      if (mediaPlayer.style.display === 'block') {
-        mediaPlayer.currentTime = asset.video_time || 0;
-        mediaPlayer.playbackRate = asset.video_speed || 1.0;
-        if (!asset.video_paused) {
-          mediaPlayer.play().catch(()=>{});
-        } else {
-          mediaPlayer.pause();
-        }
-      }
-    });
-
-    // Set playback speed (from server only)
-    socket.on('set_playback_speed', ({speed}) => {
-      mediaPlayer.playbackRate = speed;
-    });
-
-    // Seek (from server only)
-    socket.on('seek_video', ({time}) => {
-      if (mediaPlayer.style.display === 'block') {
-        mediaPlayer.currentTime = time;
-      }
-    });
-
     // Stop media (if you emit this)
     socket.on('stop_media', () => {
       mediaPlayer.pause(); mediaPlayer.currentTime = 0;
       mediaPlayer.style.display = 'none';
       slideImg.style.display = 'block';
     });
-
-    // Existing slide paging (legacy, if still used)
-    function showSlide(index) {
-      pollOverlay.style.display = 'none';
-      mediaPlayer.pause(); mediaPlayer.currentTime = 0;
-      mediaPlayer.style.display = 'none';
-      slideImg.style.display = 'block';
-      slideImg.onerror = null;
-      // try jpg then png
-      const jpg = `/static/slides/slide${index+1}.jpg`;
-      slideImg.src = jpg;
-      slideImg.onerror = () => {
-        slideImg.onerror = null;
-        slideImg.src = `/static/slides/slide${index+1}.png`;
-      };
-    }
-    socket.on('slide_update', ({index}) => showSlide(index));
 
     // (Unused) fade-in reveal, if you re-enable this
     function revealFade() {
