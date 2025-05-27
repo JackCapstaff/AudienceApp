@@ -75,8 +75,15 @@
   </div>
 
   <script>
-    const socket       = io();
-    console.log("🔗 socket.io client loaded");
+    
+
+    const socket = io({
+    transports: ['websocket'],
+    upgrade: false,
+    secure: true
+    });
+    console.log("🔗 socket.io client loaded (ws only)");
+
     socket.on("connect", () => {
       console.log("🟢 socket connected, id=", socket.id);
     });

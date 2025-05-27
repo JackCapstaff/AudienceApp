@@ -143,10 +143,19 @@
 
   <script>
     // --- 1. Setup Socket.IO client + debug ---
-    const socket = io();
-    console.log("🔗 socket.io client loaded");
-    socket.on("connect", () => console.log("✅ socket connected, id=", socket.id));
-    socket.on("connect_error", err => console.error("❌ socket connect_error:", err));
+    const socket = io({
+    transports: ['websocket'],
+    upgrade: false,
+    secure: true
+    });
+    console.log("🔗 socket.io client loaded (ws only)");
+
+    socket.on("connect", () => {
+      console.log("🟢 socket connected, id=", socket.id);
+    });
+    socket.on("connect_error", (err) => {
+      console.error("❌ Socket connect_error:", err);
+    });
 
     // --- 2. Drag & Drop Queue ---
     const tiles = document.querySelectorAll('.asset-tile');
