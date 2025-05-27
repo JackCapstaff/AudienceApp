@@ -6,9 +6,12 @@ app = Flask(__name__)
 # Pull SECRET_KEY from Heroku’s config; fall back to random if unset.
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or os.urandom(24)
 
-# Use Redis (REDIS_URL) as the message queue so all Gunicorn workers see every event.
-redis_url = os.environ.get('REDIS_URL')  # Heroku sets this for you
-socketio = SocketIO(app, message_queue=redis_url)
+redis_url = os.environ.get('REDIS_URL') or os.environ.get('REDIS_TLS_URL')
+socketio = SocketIO(
+    app,
+    message_queue=redis_url,
+    cors_allowed_origins="*"        # <— allow the client’s polling requests
+)
 
 
 
