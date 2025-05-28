@@ -1,16 +1,20 @@
 import os
 import time
-from flask import Flask, render_template, send_from_directory
+from flask import (
+    Flask, render_template, send_from_directory,
+    request, session, redirect, url_for, flash
+)
 from flask_socketio import SocketIO, emit
-from flask import Flask, render_template, request, redirect, url_for, session, flash
-from flask import request
-import os
 from dotenv import load_dotenv
+from functools import wraps
 
+# Load .env into os.environ
 load_dotenv()
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or os.urandom(24)
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24))
+
+# Redis for socket‐messaging
 redis_url = os.environ.get('REDIS_URL') or os.environ.get('REDIS_TLS_URL')
 socketio = SocketIO(
     app,
@@ -18,24 +22,33 @@ socketio = SocketIO(
     cors_allowed_origins="*"
 )
 
-
-# Load environment variables from a .env file (if using one)
-
-
-
-# Credentials must be provided via environment variables
+# -----------------------------------------------------------------------------
+# Credentials
+# -----------------------------------------------------------------------------
 VALID_USER = os.environ['CONTROL_USER']
 VALID_PASS = os.environ['CONTROL_PASS']
 
-# Decorator to protect routes
+# -----------------------------------------------------------------------------
+# Decorator
+# -----------------------------------------------------------------------------
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # Detect localhost and auto-authenticate
+        host = request.host.split(':')[0]
+        if host in ('localhost', '127.0.0.1', '::1'):
+            session['authenticated'] = True
+            return f(*args, **kwargs)
+
+        # Otherwise enforce login
         if not session.get('authenticated'):
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated_function
 
+# -----------------------------------------------------------------------------
+# Authentication routes
+# -----------------------------------------------------------------------------
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -55,20 +68,24 @@ def logout():
     flash('You have been logged out', 'info')
     return redirect(url_for('login'))
 
-
+# -----------------------------------------------------------------------------
+# Control interface
+# -----------------------------------------------------------------------------
 @app.route('/control')
+@login_required
 def control():
-    # Ensure user is authenticated
-    if not session.get('authenticated'):
-        return redirect(url_for('login'))
-    # Existing control logic follows
-    
     slides_dir = os.path.join(app.root_path, 'static', 'slides')
-    slides = sorted(f for f in os.listdir(slides_dir)
-                    if f.lower().endswith(('.png', '.jpg', '.jpeg')))
+    slides = sorted(
+        f for f in os.listdir(slides_dir)
+        if f.lower().endswith(('.png', '.jpg', '.jpeg'))
+    )
+
     media_dir = os.path.join(app.root_path, 'static', 'media')
-    videos = sorted(f for f in os.listdir(media_dir)
-                    if f.lower().endswith(('.mp4', '.webm', '.ogg')))
+    videos = sorted(
+        f for f in os.listdir(media_dir)
+        if f.lower().endswith(('.mp4', '.webm', '.ogg'))
+    )
+
     return render_template('control.html', slides=slides, videos=videos)
 
 # --- In-memory current state (reset on restart!) ---
