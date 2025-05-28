@@ -168,11 +168,9 @@
     socket.on('play_pause_video', updateVideoState);
     socket.on('set_playback_speed', asset => updateVideoState(Object.assign({}, lastAsset, {video_speed: asset.speed})));
     socket.on('seek_video', ({time}) => updateVideoState(Object.assign({}, lastAsset, {video_time: time})));
-    socket.on('transition', data => {
-        if (data.name === 'fade_to_black') blackOverlay.classList.add('blackened');
-        else if (data.name === 'fade_from_black') blackOverlay.classList.remove('blackened');
-    });
-    socket.on('fade_to_black', () => blackOverlay.classList.add('blackened'));
+      // add/remove the “blackened” class so CSS can fade
+    socket.on('fade_to_black',   () => blackOverlay.classList.add('blackened'));
+    socket.on('fade_from_black', () => blackOverlay.classList.remove('blackened'));
 
     function crossfadeTo(asset) {
         console.log('🔥 crossfadeTo start', asset);
@@ -275,7 +273,12 @@
                 mediaPlayer.load();
                 mediaPlayer.currentTime = 0;
             }
-            if (asset.video_time !== undefined) mediaPlayer.currentTime = Number(asset.video_time) || 0;
+                setupInitialVideoState(asset); 
+        }
+    }
+
+    function setupInitialVideoState(asset){
+      if (asset.video_time !== undefined) mediaPlayer.currentTime = Number(asset.video_time) || 0;
             if (asset.video_speed !== undefined) mediaPlayer.playbackRate = Number(asset.video_speed) || 1.0;
             mediaPlayer.muted = true;
 
@@ -286,7 +289,6 @@
                 mediaPlayer.play().catch(err => console.warn('Video play error:', err));
                  console.log('Pause state FALSE, Playing video');
             }
-        }
     }
 </script>
 </body>

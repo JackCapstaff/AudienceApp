@@ -4,7 +4,7 @@ from flask import (
     Flask, render_template, send_from_directory,
     request, session, redirect, url_for, flash
 )
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit, disconnect
 from dotenv import load_dotenv
 from functools import wraps
 
@@ -21,6 +21,22 @@ socketio = SocketIO(
     message_queue=redis_url,
     cors_allowed_origins="*"
 )
+
+
+# Add global counter
+active_viewers = 0
+
+@socketio.on('connect')
+def on_connect():
+    global active_viewers
+    active_viewers += 1
+    emit('viewer_count_update', {'count': active_viewers}, broadcast=True)
+
+@socketio.on('disconnect')
+def on_disconnect():
+    global active_viewers
+    active_viewers = max(0, active_viewers - 1)  # Ensure never negative
+    emit('viewer_count_update', {'count': active_viewers}, broadcast=True)
 
 # -----------------------------------------------------------------------------
 # Credentials
@@ -189,6 +205,10 @@ def handle_crossfade_to(asset):
 @socketio.on('fade_to_black')
 def on_fade_to_black():
     emit('fade_to_black', broadcast=True)
+
+@socketio.on('fade_from_black')
+def on_fade_from_black():
+    emit('fade_from_black', broadcast=True)
 
 @socketio.on('play_pause_video')
 def on_play_pause_video():

@@ -57,17 +57,19 @@
 </head>
 <body>
   <header>
-    <nav>
-   
+    <nav>   
       <a href="{{ url_for('logout') }}" class="logout-button">Logout</a>
     </nav>
+
+    <div id="active-viewer-count" style="padding:0.5rem; margin-top:0.5rem; font-weight:bold;">
+    Active viewers: <span id="viewer-count">0</span>
+    </div>
   </header>
   <h1>🎛️ Control Panel</h1>
   <div id="top-controls">
     <button id="black-button">Go to Black Screen</button>
     <button id="placeholder-button">Go to Placeholder</button>
-    <button onclick="step(-1)">← Previous</button>
-    <button onclick="step(1)">Next →</button>
+    
   </div>
 
   <div id="crossfade-settings" style="margin:0.5em 0;">
@@ -291,13 +293,12 @@
           ...nextAsset,
           crossfade_duration: dur
         });
-           updatePreviewArea(nextAsset); // Update preview area - PRE EMPTIVELY CALL UPDATE FUNCTION
+           updatePreviewArea(nextAsset); // Update preview area
         }
           return;
       }
       if(asset.type==='cue'&&asset.name==='autoplay_next'){ autoplayEnabled=true; alert('Autoplay Next enabled'); return; }
-      let videoPaused = !autoplay; //Set video paused to opposite of the auto play
-      if(fadeOut){ socket.emit('fade_to_black'); setTimeout(()=>socket.emit('display_asset',{...asset,fadeIn,autoplay, video_paused:videoPaused, video_time:0, video_speed:1}),850); } else socket.emit('display_asset',{...asset,fadeIn,autoplay, video_paused:videoPaused, video_time:0, video_speed:1});
+      if(fadeOut){ socket.emit('fade_to_black'); setTimeout(()=>socket.emit('display_asset',{...asset,fadeIn,autoplay}),850); } else socket.emit('display_asset',{...asset,fadeIn,autoplay});
         updatePreviewArea(asset); //Update asset area
       if(asset.type==='video'&&autoplayEnabled){ setupAutoplayListener(); autoplayEnabled=false; }
     }
@@ -308,6 +309,8 @@
 
     // Audience reflection
     socket.on('sync_state',updateAudiencePanel);
+    socket.on('viewer_count_update', data => {
+    document.getElementById('viewer-count').textContent = data.count;});
     socket.on('display_asset',updateAudiencePanel);
     socket.on('play_pause_video',updateAudiencePanel);
     socket.on('set_playback_speed',asset=>updateAudiencePanel(asset));
@@ -355,7 +358,46 @@
 
     // Keyboard & init
     const playPauseBtn=document.getElementById('play-pause-button');
-    document.addEventListener('keydown',e=>{ if(['INPUT','TEXTAREA'].includes(document.activeElement.tagName))return; if(e.key==='ArrowRight'){ nextInQueue(); e.preventDefault(); } else if(e.key==='ArrowLeft'){ prevInQueue(); e.preventDefault(); } else if(e.key==='Enter'){ sendCurrent(); e.preventDefault(); } else if(e.code==='Space'){ playPauseBtn.click(); e.preventDefault(); }});
+    document.addEventListener('keydown',e=>{
+      if(['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) return;
+
+      if(e.key==='ArrowRight'){
+        nextInQueue();
+        e.preventDefault();
+      } else if(e.key==='ArrowLeft'){
+        prevInQueue();
+        e.preventDefault();
+      } else if(e.key==='Enter'){
+        sendCurrent();
+        e.preventDefault();
+      } else if (e.key === 'ArrowUp') { // New: Up Arrow (modified)
+          let newIndex = currentIdx;
+          // Find the previous non-transition asset
+          while (newIndex > 0) {
+              newIndex--;
+              if (queue[newIndex].type !== 'transition') {
+                  currentIdx = newIndex;
+                  break;
+              }
+          }
+          if (queue[currentIdx].type === 'transition') {
+              // If no non-transition asset found, stay at current index
+              newIndex = currentIdx;
+              currentIdx = newIndex;
+          }
+
+          renderQueue();
+          sendCurrent();
+          e.preventDefault();
+      }  else if (e.key === 'ArrowDown') { // New: Down Arrow
+        nextInQueue();
+        sendCurrent();
+        e.preventDefault();
+      } else if(e.code==='Space'){
+        playPauseBtn.click();
+        e.preventDefault();
+      }
+    });
     playPauseBtn.onclick=()=>{ const v=document.getElementById('current-audience-video'); if(v.style.display==='block'){ v.paused?v.play():v.pause(); } socket.emit('play_pause_video'); };
     const crossfadeInput=document.getElementById('crossfade-duration'); if(localStorage.getItem('crossfade_duration')) crossfadeInput.value=localStorage.getItem('crossfade_duration'); crossfadeInput.onchange=()=>localStorage.setItem('crossfade_duration',crossfadeInput.value);
     renderQueue();
