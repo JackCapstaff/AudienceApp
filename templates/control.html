@@ -310,7 +310,9 @@
     // Audience reflection
     socket.on('sync_state',updateAudiencePanel);
     socket.on('viewer_count_update', data => {
-    document.getElementById('viewer-count').textContent = data.count;});
+      console.log('Viewer count updated:', data);
+      document.getElementById('viewer-count').textContent = data.count;
+    });
     socket.on('display_asset',updateAudiencePanel);
     socket.on('play_pause_video',updateAudiencePanel);
     socket.on('set_playback_speed',asset=>updateAudiencePanel(asset));

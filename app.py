@@ -7,6 +7,8 @@ from flask import (
 from flask_socketio import SocketIO, emit, disconnect
 from dotenv import load_dotenv
 from functools import wraps
+import threading
+
 
 # Load .env into os.environ
 load_dotenv()
@@ -19,23 +21,28 @@ redis_url = os.environ.get('REDIS_URL') or os.environ.get('REDIS_TLS_URL')
 socketio = SocketIO(
     app,
     message_queue=redis_url,
-    cors_allowed_origins="*"
+    cors_allowed_origins="*",
+    async_mode='threading'  # <-- Clearly set threading mode
 )
 
 
 # Add global counter
 active_viewers = 0
 
+active_viewers = 0
+
 @socketio.on('connect')
 def on_connect():
     global active_viewers
     active_viewers += 1
+    print(f"Socket connected: active viewers now {active_viewers}")
     emit('viewer_count_update', {'count': active_viewers}, broadcast=True)
 
 @socketio.on('disconnect')
 def on_disconnect():
     global active_viewers
-    active_viewers = max(0, active_viewers - 1)  # Ensure never negative
+    active_viewers = max(0, active_viewers - 1)
+    print(f"Socket disconnected: active viewers now {active_viewers}")
     emit('viewer_count_update', {'count': active_viewers}, broadcast=True)
 
 # -----------------------------------------------------------------------------
@@ -247,4 +254,4 @@ def on_seek_video(data):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    socketio.run(app, host='0.0.0.0', port=port)
+    socketio.run(app, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)

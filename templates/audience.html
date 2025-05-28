@@ -126,7 +126,10 @@
     </div>
 </div>
 <script>
-    const socket = io();
+    const socket = io({
+        transports: ['websocket'], 
+        upgrade: false
+    });
     const slideImg = document.getElementById('slide-img');
     const mediaPlayer = document.getElementById('media-player');
     const mediaSource = document.getElementById('media-source');
@@ -140,6 +143,9 @@
     let lastAsset = {type: 'slide', name: 'holdingslide.jpg'};
     let crossfadePending = null;
     let transitioning = false; // Add this line
+
+    socket.on('connect', () => console.log('Audience connected to socket.io'));
+    socket.on('disconnect', () => console.log('Audience disconnected from socket.io'));
 
     // Debug all events
     socket.onAny((event, ...args) => console.log('[socket event]', event, args));
