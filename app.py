@@ -7,8 +7,6 @@ from flask import (
 from flask_socketio import SocketIO, emit, disconnect
 from dotenv import load_dotenv
 from functools import wraps
-import threading
-
 
 # Load .env into os.environ
 load_dotenv()
@@ -21,8 +19,7 @@ redis_url = os.environ.get('REDIS_URL') or os.environ.get('REDIS_TLS_URL')
 socketio = SocketIO(
     app,
     message_queue=redis_url,
-    cors_allowed_origins="*",
-    async_mode='threading'  # <-- Clearly set threading mode
+    cors_allowed_origins="*"
 )
 
 
@@ -254,4 +251,4 @@ def on_seek_video(data):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    socketio.run(app, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=port)
