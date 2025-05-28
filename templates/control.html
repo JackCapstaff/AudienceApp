@@ -77,6 +77,27 @@
     .queue-tile .remove-btn:hover {
       background: #b30000;
     }
+    .queue-tile .autoplay-toggle {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      background: rgba(0,150,255,0.85);
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      font-size: 0.85em;
+      padding: 1px 6px;
+      cursor: pointer;
+      display: none;
+      z-index: 2;
+      transition: background 0.2s;
+    }
+    .queue-tile:hover .autoplay-toggle {
+      display: block;
+    }
+    .queue-tile .autoplay-toggle.on {
+      background: #34c759;
+    }
   </style>
 </head>
 <body>
@@ -143,11 +164,7 @@
         <div style="background:linear-gradient(90deg,#111,#fff,#111);width:100%;height:60px;display:flex;align-items:center;justify-content:center;">
           <span class="transition-label" style="color:black;">Crossfade</span>
         </div>
-      </div>
-      <div class="transition-tile" draggable="true" data-type="cue" data-name="autoplay_next">
-        <div style="background:#005bb5;width:100%;height:60px;display:flex;align-items:center;justify-content:center;">
-          <span class="transition-label" style="color:white;">Autoplay Next</span>
-        </div>
+      
       </div>
     </div>
   </div>
@@ -188,14 +205,16 @@
     <span id="media-time">00:00 / 00:00</span>
   </div>
 
-  <div id="preview-area">
-    <div id="current-audience-container">
-      <h2>Current Audience View</h2>
-      <img id="current-audience-img" alt="Current Audience Slide"/>
-      <video id="current-audience-video" controls>
-        <source id="current-audience-source" src="" type="video/mp4">
-      </video>
-    </div>
+  <div id="current-audience-container">
+    <h2>Current Audience View</h2>
+    <iframe
+      src="/"
+      id="audience-iframe"
+      style="width:100%;height:320px;border:1px solid #ccc;background:black;border-radius:6px;"
+      title="Audience Live View"
+      allowfullscreen
+    ></iframe>
+  </div>
     <div id="preview-container">
       <h2>Preview</h2>
       <img id="preview-img" alt="Slide preview"/>
@@ -356,6 +375,18 @@
         lbl.textContent = item.name;
         div.appendChild(lbl);
 
+        const autoBtn = document.createElement('button');
+          autoBtn.className = 'autoplay-toggle' + (item.autoplay ? ' on' : '');
+          autoBtn.title = 'Toggle autoplay next for this video';
+          autoBtn.textContent = 'Auto';
+          autoBtn.onclick = function(ev) {
+            ev.stopPropagation();
+            item.autoplay = !item.autoplay;
+            renderQueue();
+          };
+          div.appendChild(autoBtn);
+        
+
         const removeBtn = document.createElement('button');
         removeBtn.className = 'remove-btn';
         removeBtn.innerHTML = '&times;';
@@ -403,13 +434,21 @@
     // Send asset
     let autoplayEnabled=false;
     function sendCurrent(){ if(currentIdx<0||currentIdx>=queue.length)return alert('Select asset first'); sendAsset(queue[currentIdx],currentIdx); }
-    function sendAsset(asset,idx){ const fadeOut=document.getElementById('fadeout-checkbox').checked; const fadeIn=document.getElementById('fadein-checkbox').checked; const autoplay=document.getElementById('autoplay-checkbox').checked;
-      
+    
+    function sendAsset(asset, idx) {
+      const fadeOut = document.getElementById('fadeout-checkbox').checked;
+      const fadeIn = document.getElementById('fadein-checkbox').checked;
+      // No longer need a global autoplay checkbox for videos, but can keep if you want manual override
+      // const autoplay = document.getElementById('autoplay-checkbox').checked;
+
+      // --- FADE TO BLACK ---
       if (asset.type === 'transition' && asset.name === 'fade_to_black') {
         const dur = parseFloat(document.getElementById('fade-black-duration')?.value) || 0.8;
         socket.emit('fade_to_black', { duration: dur });
         return;
       }
+
+      // --- FADE FROM BLACK ---
       if (asset.type === 'transition' && asset.name === 'fade_from_black') {
         // Find next non-transition asset in queue for fade-up!
         let nextIdx = (idx + 1) % queue.length;
@@ -433,40 +472,67 @@
           // 3. After a very short delay, fade up from black
           setTimeout(() => {
             socket.emit('fade_from_black', { duration: dur });
-          }, 20); // Just enough to let the DOM/render settle
+          }, 20);
         }
         return;
       }
 
-
-    
+      // --- CROSSFADE ---
       if (asset.type === 'transition' && asset.name === 'crossfade') {
-      // determine the next asset in the queue
-      const nextIdx = (idx + 1) % queue.length;
-      const nextAsset = queue[nextIdx];
+        const nextIdx = (idx + 1) % queue.length;
+        const nextAsset = queue[nextIdx];
 
-      if (nextAsset && (nextAsset.type === 'slide' || nextAsset.type === 'video')) {
-        currentIdx = nextIdx;
-        renderQueue();
+        if (nextAsset && (nextAsset.type === 'slide' || nextAsset.type === 'video')) {
+          currentIdx = nextIdx;
+          renderQueue();
 
-        // read your duration input
-        const dur = parseFloat(document.getElementById('crossfade-duration').value) || 2.0;
+          const dur = parseFloat(document.getElementById('crossfade-duration').value) || 2.0;
 
-        // emit the full asset payload plus duration
-        socket.emit('crossfade_to', {
-          ...nextAsset,
-          crossfade_duration: dur
-        });
-           updatePreviewArea(nextAsset); // Update preview area
+          socket.emit('crossfade_to', {
+            ...nextAsset,
+            crossfade_duration: dur
+          });
+          updatePreviewArea(nextAsset);
         }
-          return;
+        return;
       }
-      if(asset.type==='cue'&&asset.name==='autoplay_next'){ autoplayEnabled=true; alert('Autoplay Next enabled'); return; }
-      if(fadeOut){ socket.emit('fade_to_black'); setTimeout(()=>socket.emit('display_asset',{...asset,fadeIn,autoplay}),850); } else socket.emit('display_asset',{...asset,fadeIn,autoplay});
-        updatePreviewArea(asset); //Update asset area
-      if(asset.type==='video'&&autoplayEnabled){ setupAutoplayListener(); autoplayEnabled=false; }
+
+      // --- DISPLAY SLIDE OR VIDEO (default case) ---
+      if (fadeOut) {
+        const dur = parseFloat(document.getElementById('fade-black-duration')?.value) || 0.8;
+        socket.emit('fade_to_black', { duration: dur });
+        setTimeout(() => {
+          socket.emit('display_asset', { ...asset, fadeIn, autoplay: !!asset.autoplay });
+          updatePreviewArea(asset);
+          // Only setupAutoplayListener for video assets
+          if (asset.type === 'video') setupAutoplayListener();
+        }, dur * 1000 + 20);
+      } else {
+        socket.emit('display_asset', { ...asset, fadeIn, autoplay: !!asset.autoplay });
+        updatePreviewArea(asset);
+        if (asset.type === 'video') setupAutoplayListener();
+      }
     }
-    function setupAutoplayListener(){ const video=document.getElementById('current-audience-video'); video.onended=function(){ let ni=(currentIdx+1)%queue.length; let na=queue[ni]; if(na&&na.type==='transition'&&na.name==='crossfade'){ let nni=(ni+1)%queue.length; let af=queue[nni]; if(af&&(af.type==='slide'||af.type==='video')){ currentIdx=nni; renderQueue(); let dur=parseFloat(document.getElementById('crossfade-duration').value)||2.0; socket.emit('crossfade_to',{...af,crossfade_duration:dur}); video.onended=null; return; }} if(na&&(na.type==='slide'||na.type==='video')){ currentIdx=ni; renderQueue(); sendAsset(na,currentIdx);} video.onended=null; }; }
+
+    function setupAutoplayListener() {
+      const video = document.getElementById('current-audience-video');
+      video.onended = function() {
+        // Check if the current video has autoplay enabled
+        if (queue[currentIdx] && queue[currentIdx].type === 'video' && queue[currentIdx].autoplay) {
+          // Advance to next in queue (could be transition, fade, etc.)
+          let ni = (currentIdx + 1) % queue.length;
+          let next = queue[ni];
+          if (next) {
+            currentIdx = ni;
+            renderQueue();
+            sendAsset(next, currentIdx);
+          }
+        } else {
+          // No autoplay: do nothing, just pause at end.
+          video.onended = null;
+        }
+      };
+    }
 
     // Preview
     function previewQueueItem(item){ if(item.type==='slide'){ previewImg.style.display='block'; previewImg.src=`/static/slides/${item.name}`; previewVid.style.display='none'; } else if(item.type==='video'){ previewVid.style.display='block'; previewSrc.src=`/static/media/${item.name}`; previewVid.load(); previewImg.style.display='none'; } else { previewImg.style.display='none'; previewVid.style.display='none'; }}
@@ -481,17 +547,16 @@
     socket.on('play_pause_video',updateAudiencePanel);
     socket.on('set_playback_speed',asset=>updateAudiencePanel(asset));
     socket.on('seek_video',({time})=>updateAudiencePanel({video_time:time}));
-    socket.on('crossfade_to',asset=>updateAudiencePanel(asset));
+    socket.on('crossfade_to', updateAudiencePanel);
+    
     socket.on('fade_to_black', function(data) {
-      const dur = data && data.duration ? data.duration : 0.8; // fallback to 0.8s
-      blackOverlay.style.transition = `opacity ${dur}s ease`;
-      blackOverlay.classList.add('blackened');
+      const c = document.getElementById('current-audience-container');
+      c.style.background = 'black';
+      document.getElementById('current-audience-img').style.display = 'none';
+      document.getElementById('current-audience-video').style.display = 'none';
     });
-
     socket.on('fade_from_black', function(data) {
-      const dur = data && data.duration ? data.duration : 0.8;
-      blackOverlay.style.transition = `opacity ${dur}s ease`;
-      blackOverlay.classList.remove('blackened');
+      document.getElementById('current-audience-container').style.background = '';
     });
     function updateAudiencePanel(asset) {
         if (!asset) return;
