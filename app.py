@@ -207,12 +207,12 @@ def handle_crossfade_to(asset):
 
 
 @socketio.on('fade_to_black')
-def on_fade_to_black():
-    emit('fade_to_black', broadcast=True)
+def on_fade_to_black(data=None):
+    emit('fade_to_black', data or {}, broadcast=True)
 
 @socketio.on('fade_from_black')
-def on_fade_from_black():
-    emit('fade_from_black', broadcast=True)
+def on_fade_from_black(data=None):
+    emit('fade_from_black', data or {}, broadcast=True)
 
 @socketio.on('play_pause_video')
 def on_play_pause_video():

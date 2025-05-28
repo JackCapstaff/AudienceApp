@@ -53,6 +53,30 @@
     .transition-label { font-weight:bold; letter-spacing: 1px; }
     #transition-box { border:2px dashed #888; margin-bottom:1rem; background:#222; padding:0.5rem; }
     #transition-box h3 { margin:0 0 0.3em 0; color:#ccc; font-size:1.1em;}
+
+    .queue-tile .remove-btn {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      background: rgba(255, 40, 40, 0.9);
+      color: #fff;
+      border: none;
+      border-radius: 50%;
+      font-size: 1.1em;
+      width: 22px;
+      height: 22px;
+      line-height: 18px;
+      cursor: pointer;
+      display: none;
+      z-index: 2;
+      transition: background 0.2s;
+    }
+    .queue-tile:hover .remove-btn {
+      display: block;
+    }
+    .queue-tile .remove-btn:hover {
+      background: #b30000;
+    }
   </style>
 </head>
 <body>
@@ -77,6 +101,11 @@
       <input type="number" id="crossfade-duration" min="0.2" max="10" step="0.1" value="2.0" style="width:4em;">
       seconds
     </label>
+    <label>Fade-to-Black Duration:
+      <input type="number" id="fade-black-duration" min="0.2" max="10" step="0.1" value="0.8" style="width:4em;">
+      seconds
+    </label>
+
   </div>
 
   <h2>Asset Library (drag into queue)</h2>
@@ -128,23 +157,27 @@
   <div id="queue-controls">
     <button onclick="prevInQueue()">← Prev in Queue</button>
     <button onclick="nextInQueue()">Next in Queue →</button>
+    <button onclick="sendCurrent()">Send Current</button>
   </div>
 
   <div id="send-options">
     <label><input type="checkbox" id="fadeout-checkbox"/> Fade Out to Black</label>
     <label><input type="checkbox" id="fadein-checkbox"/> Fade In from Black</label>
     <label><input type="checkbox" id="autoplay-checkbox"/> Autoplay videos</label>
-    <button onclick="sendCurrent()">Send Current</button>
+    
   </div>
 
   <div id="queue-presets">
-    <button id="save-preset-button">Save Preset</button>
-    <button id="load-preset-button">Load Preset</button>
+    
     <label style="margin-left:1rem;">
       Import Queue CSV:
       <input type="file" id="import-csv" accept=".csv">
     </label>
-    <button id="export-csv-button" style="margin-left:1rem;">Export Queue CSV</button>
+    <label style="margin-left:1rem;">
+      Export Queue CSV:
+      <input type="file" id="export-csv-button" accept=".csv">
+    </label>
+   
   </div>
 
   <div id="media-controls">
@@ -176,7 +209,12 @@
     const socket = io({ transports: ['websocket'], upgrade: false, secure: true });
 
     // Black & Placeholder
-    document.getElementById('black-button').onclick = () => socket.emit('transition', { name: 'fade_to_black' });
+    document.getElementById('black-button').onclick = () => {
+      // Get duration (could add an input for this)
+      const dur = parseFloat(document.getElementById('fade-black-duration')?.value) || 0.8;
+      socket.emit('fade_to_black', { duration: dur });
+    };
+
     document.getElementById('placeholder-button').onclick = () => socket.emit('display_asset', { type: 'slide', name: 'holdingslide.jpg', autoplay: false, fadeIn: false });
 
     // --- Drag/Drop assets & transitions ---
@@ -213,19 +251,59 @@
     document.getElementById('import-csv').addEventListener('change', e => {
       const file = e.target.files[0];
       if (!file) return;
+
+      // 1. If queue already has items, prompt the user
+      if (queue.length > 0) {
+        // 2. Show warning and ask if they want to save, proceed, or cancel
+        const msg = "⚠️ Importing will overwrite your current queue.\n\nDo you want to export (save) the current queue before importing?\n\nPress OK to save and continue, Cancel to show more options.";
+        if (confirm(msg)) {
+          // Export current queue first
+          document.getElementById('export-csv-button').click();
+          // Then proceed after export
+          setTimeout(() => doImport(file), 500); // Give the save dialog a moment
+        } else {
+          // Offer choice: Proceed without saving, or cancel
+          const proceed = confirm("Are you sure you want to overwrite the current queue?\n\nPress OK to continue and overwrite, or Cancel to abort import.");
+          if (proceed) {
+            doImport(file);
+          } else {
+            // Cancelled
+            e.target.value = ""; // Reset file input so it can be reused
+            alert("Import cancelled. Your queue was not changed.");
+          }
+        }
+      } else {
+        // If queue is empty, just import
+        doImport(file);
+      }
+    });
+
+    // Import helper function
+    function doImport(file) {
+      queue.length = 0; // Clear the queue
       Papa.parse(file, {
         header: true,
         skipEmptyLines: true,
         complete: results => {
           results.data.forEach(row => {
-            queue.push({ type: row.type, name: row.name, fadeOut: row.fadeOut==='true', fadeIn: row.fadeIn==='true', autoplay: row.autoplay==='true' });
+            queue.push({
+              type: row.type,
+              name: row.name,
+              fadeOut: row.fadeOut === 'true',
+              fadeIn: row.fadeIn === 'true',
+              autoplay: row.autoplay === 'true'
+            });
           });
           renderQueue();
           alert(`Imported ${results.data.length} items.`);
+          document.getElementById('import-csv').value = ""; // Reset file input
         },
-        error: err => alert('CSV parse error: '+err.message)
+        error: err => {
+          alert('CSV parse error: ' + err.message);
+          document.getElementById('import-csv').value = ""; // Reset file input
+        }
       });
-    });
+    }
 
     // Export CSV listener
     document.getElementById('export-csv-button').addEventListener('click', () => {
@@ -240,42 +318,128 @@
     });
 
     function renderQueue() {
-      queueEl.innerHTML='';
-      queue.forEach((item,i)=>{
-        const div=document.createElement('div'); div.className='queue-tile'+(i===currentIdx?' current':'');
-        div.addEventListener('click',()=>{ currentIdx=i; renderQueue(); previewQueueItem(item); });
-        if(item.type==='slide'){
-          const img=document.createElement('img'); img.src=`/static/slides/${item.name}`; div.appendChild(img);
-        } else if(item.type==='video'){
-          const vid=document.createElement('video'); vid.muted=true; vid.src=`/static/media/${item.name}`; div.appendChild(vid);
+      queueEl.innerHTML = '';
+      queue.forEach((item, i) => {
+        const div = document.createElement('div');
+        div.className = 'queue-tile' + (i === currentIdx ? ' current' : '');
+        div.addEventListener('click', () => {
+          currentIdx = i;
+          renderQueue();
+        });
+
+        // Render the asset or transition tile
+        if (item.type === 'slide') {
+          const img = document.createElement('img');
+          img.src = `/static/slides/${item.name}`;
+          div.appendChild(img);
+        } else if (item.type === 'video') {
+          const vid = document.createElement('video');
+          vid.muted = true;
+          vid.src = `/static/media/${item.name}`;
+          div.appendChild(vid);
         } else {
-          let label='';
-          if(item.name==='fade_to_black') label='Fade to Black';
-          if(item.name==='fade_from_black') label='Fade from Black';
-          if(item.name==='crossfade') label='Crossfade';
-          if(item.name==='autoplay_next') label='Autoplay Next';
-          const div2=document.createElement('div');
-          div2.style.cssText='background:#000;width:100%;height:60px;display:flex;align-items:center;justify-content:center;';
-          if(item.name==='fade_from_black') div2.style.background='#444';
-          if(item.name==='crossfade') div2.style.background='linear-gradient(90deg,#111,#fff,#111)';
-          if(item.name==='autoplay_next') div2.style.background='#005bb5';
-          div2.innerHTML=`<span class="transition-label" style="color:${item.name==='crossfade'?'black':'white'}">${label}</span>`;
+          let label = '';
+          if (item.name === 'fade_to_black') label = 'Fade to Black';
+          if (item.name === 'fade_from_black') label = 'Fade from Black';
+          if (item.name === 'crossfade') label = 'Crossfade';
+          if (item.name === 'autoplay_next') label = 'Autoplay Next';
+          const div2 = document.createElement('div');
+          div2.style.cssText = 'background:#000;width:100%;height:60px;display:flex;align-items:center;justify-content:center;';
+          if (item.name === 'fade_from_black') div2.style.background = '#444';
+          if (item.name === 'crossfade') div2.style.background = 'linear-gradient(90deg,#111,#fff,#111)';
+          if (item.name === 'autoplay_next') div2.style.background = '#005bb5';
+          div2.innerHTML = `<span class="transition-label" style="color:${item.name === 'crossfade' ? 'black' : 'white'}">${label}</span>`;
           div.appendChild(div2);
         }
-        const lbl=document.createElement('div'); lbl.className='tile-label'; lbl.textContent=item.name; div.appendChild(lbl);
+        const lbl = document.createElement('div');
+        lbl.className = 'tile-label';
+        lbl.textContent = item.name;
+        div.appendChild(lbl);
+
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'remove-btn';
+        removeBtn.innerHTML = '&times;';
+        removeBtn.title = 'Remove from queue';
+        removeBtn.onclick = function(ev) {
+          ev.stopPropagation(); // Prevent queue selection
+          // Remove the item
+          queue.splice(i, 1);
+          // Adjust currentIdx if needed
+          if (currentIdx >= queue.length) currentIdx = queue.length - 1;
+          renderQueue();
+        };
+        div.appendChild(removeBtn);
+
         queueEl.appendChild(div);
       });
+
+      // ------ Preview logic (this is the important part) ------
+      if (queue[currentIdx]) {
+        let toPreview = queue[currentIdx];
+        if (toPreview.type === 'transition') {
+          let nonTrans = getFirstNonTransitionAfter(currentIdx);
+          if (nonTrans) toPreview = nonTrans;
+        }
+        previewQueueItem(toPreview);
+      }
     }
 
     // Queue navigation
-    function nextInQueue(){ if(!queue.length)return alert('Queue empty'); currentIdx=(currentIdx+1)%queue.length; renderQueue(); previewQueueItem(queue[currentIdx]); }
-    function prevInQueue(){ if(!queue.length)return alert('Queue empty'); currentIdx=(currentIdx-1+queue.length)%queue.length; renderQueue(); previewQueueItem(queue[currentIdx]); }
+    function nextInQueue() {
+      if (!queue.length) return alert('Queue empty');
+      currentIdx = (currentIdx + 1) % queue.length;
+      renderQueue();
+    }
+
+    function prevInQueue() {
+      if (!queue.length) return alert('Queue empty');
+      currentIdx = (currentIdx - 1 + queue.length) % queue.length;
+      renderQueue();
+    }
+
+
     function step(delta){ socket.emit('change_slide',{index:delta}); }
 
     // Send asset
     let autoplayEnabled=false;
     function sendCurrent(){ if(currentIdx<0||currentIdx>=queue.length)return alert('Select asset first'); sendAsset(queue[currentIdx],currentIdx); }
     function sendAsset(asset,idx){ const fadeOut=document.getElementById('fadeout-checkbox').checked; const fadeIn=document.getElementById('fadein-checkbox').checked; const autoplay=document.getElementById('autoplay-checkbox').checked;
+      
+      if (asset.type === 'transition' && asset.name === 'fade_to_black') {
+        const dur = parseFloat(document.getElementById('fade-black-duration')?.value) || 0.8;
+        socket.emit('fade_to_black', { duration: dur });
+        return;
+      }
+      if (asset.type === 'transition' && asset.name === 'fade_from_black') {
+        // Find next non-transition asset in queue for fade-up!
+        let nextIdx = (idx + 1) % queue.length;
+        let nextAsset = null;
+        for (let tries = 0; tries < queue.length; tries++) {
+          if (queue[nextIdx].type !== 'transition') {
+            nextAsset = queue[nextIdx];
+            break;
+          }
+          nextIdx = (nextIdx + 1) % queue.length;
+        }
+        const dur = parseFloat(document.getElementById('fade-black-duration')?.value) || 0.8;
+        if (nextAsset) {
+          // 1. Switch the asset under black
+          socket.emit('display_asset', { ...nextAsset });
+
+          // 2. Move highlight to the new asset and re-render
+          currentIdx = nextIdx;
+          renderQueue();
+
+          // 3. After a very short delay, fade up from black
+          setTimeout(() => {
+            socket.emit('fade_from_black', { duration: dur });
+          }, 20); // Just enough to let the DOM/render settle
+        }
+        return;
+      }
+
+
+    
       if (asset.type === 'transition' && asset.name === 'crossfade') {
       // determine the next asset in the queue
       const nextIdx = (idx + 1) % queue.length;
@@ -318,9 +482,17 @@
     socket.on('set_playback_speed',asset=>updateAudiencePanel(asset));
     socket.on('seek_video',({time})=>updateAudiencePanel({video_time:time}));
     socket.on('crossfade_to',asset=>updateAudiencePanel(asset));
-    socket.on('fade_to_black',()=>{ const c=document.getElementById('current-audience-container'); c.style.background='black'; document.getElementById('current-audience-img').style.display='none'; document.getElementById('current-audience-video').style.display='none'; });
-    socket.on('fade_from_black',()=>{ document.getElementById('current-audience-container').style.background=''; });
+    socket.on('fade_to_black', function(data) {
+      const dur = data && data.duration ? data.duration : 0.8; // fallback to 0.8s
+      blackOverlay.style.transition = `opacity ${dur}s ease`;
+      blackOverlay.classList.add('blackened');
+    });
 
+    socket.on('fade_from_black', function(data) {
+      const dur = data && data.duration ? data.duration : 0.8;
+      blackOverlay.style.transition = `opacity ${dur}s ease`;
+      blackOverlay.classList.remove('blackened');
+    });
     function updateAudiencePanel(asset) {
         if (!asset) return;
         const ci = document.getElementById('current-audience-img');
@@ -355,8 +527,20 @@
         socket.emit('sync_state',asset)
     }
 
+    function getFirstNonTransitionAfter(idx) {
+      if (!queue.length) return null;
+      let i = (idx + 1) % queue.length;
+      for (let tries = 0; tries < queue.length; tries++) {
+        if (queue[i].type !== 'transition') return queue[i];
+        i = (i + 1) % queue.length;
+      }
+      return null;
+    }
+
     // Sortable
     new Sortable(queueEl,{ animation:150,onEnd(evt){ const t=queue[evt.oldIndex]; queue.splice(evt.oldIndex,1); queue.splice(evt.newIndex,0,t); if(currentIdx===evt.oldIndex) currentIdx=evt.newIndex; else if(evt.oldIndex<currentIdx&&evt.newIndex>=currentIdx) currentIdx--; else if(evt.oldIndex>currentIdx&&evt.newIndex<=currentIdx) currentIdx++; renderQueue(); }});
+
+    
 
     // Keyboard & init
     const playPauseBtn=document.getElementById('play-pause-button');
