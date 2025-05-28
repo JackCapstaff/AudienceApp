@@ -1,0 +1,5 @@
+﻿type,name,fadeOut,fadeIn,autoplay
+slide,holdingslide.jpg,FALSE,FALSE,FALSE
+slide,slide1.png,TRUE,FALSE,TRUE
+transition,crossfade,FALSE,FALSE,FALSE
+slide,slide2.png,FALSE,TRUE,FALSE

@@ -3,10 +3,13 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Control Panel</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.min.js"
-          crossorigin="anonymous"></script>
+  <title>🎛️ Control Panel</title>
+  <!-- Socket.IO -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.min.js" crossorigin="anonymous"></script>
+  <!-- SortableJS for drag-and-drop queue -->
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+  <!-- PapaParse for CSV import -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.1/papaparse.min.js"></script>
   <style>
     body { font-family: sans-serif; padding:1rem; }
     h1 { margin-top: 0; }
@@ -18,21 +21,25 @@
       margin: 0.5rem 0; border:1px solid #ccc; padding:0.5rem; min-height: 120px;
     }
     .asset-tile, .queue-tile, .transition-tile {
-      position: relative; cursor: grab; border:2px solid transparent; border-radius:6px; overflow:hidden; background:#111;
+      position: relative; cursor: grab; border:2px solid transparent;
+      border-radius:6px; overflow:hidden; background:#111;
       user-select: none;
     }
     .queue-tile.current { border-color:#007BFF; }
     .asset-tile img, .asset-tile video, .queue-tile img, .queue-tile video {
       width:100%; height:auto; object-fit:contain;
+      pointer-events: none;
     }
     .tile-label {
-      position:absolute; bottom:2px; left:2px; background:rgba(0,0,0,0.6); color:white;
+      position:absolute; bottom:2px; left:2px;
+      background:rgba(0,0,0,0.6); color:white;
       padding:1px 4px; font-size:0.75rem;
     }
     #send-options, #queue-controls { margin:0.5rem 0; }
     #send-options label, #queue-controls button { margin-right:0.5rem; }
     #preview-container, #current-audience-container {
-      border: 1px solid #ccc; padding: 0.5rem; margin-bottom: 0.5rem; width: 50%; box-sizing: border-box;
+      border: 1px solid #ccc; padding: 0.5rem; margin-bottom: 0.5rem;
+      width: 48%; box-sizing: border-box;
     }
     #preview-area {
       display: flex; justify-content: space-between; width: 100%;
@@ -49,6 +56,12 @@
   </style>
 </head>
 <body>
+  <header>
+    <nav>
+   
+      <a href="{{ url_for('logout') }}" class="logout-button">Logout</a>
+    </nav>
+  </header>
   <h1>🎛️ Control Panel</h1>
   <div id="top-controls">
     <button id="black-button">Go to Black Screen</button>
@@ -67,15 +80,13 @@
   <h2>Asset Library (drag into queue)</h2>
   <div id="asset-grid">
     {% for slide in slides %}
-      <div class="asset-tile" draggable="true"
-           data-type="slide" data-name="{{ slide }}">
+      <div class="asset-tile" draggable="true" data-type="slide" data-name="{{ slide }}">
         <img src="/static/slides/{{ slide }}" alt="{{ slide }}"/>
         <div class="tile-label">{{ slide }}</div>
       </div>
     {% endfor %}
     {% for vid in videos %}
-      <div class="asset-tile" draggable="true"
-           data-type="video" data-name="{{ vid }}">
+      <div class="asset-tile" draggable="true" data-type="video" data-name="{{ vid }}">
         <video muted>
           <source src="/static/media/{{ vid }}" type="video/mp4">
         </video>
@@ -127,6 +138,11 @@
   <div id="queue-presets">
     <button id="save-preset-button">Save Preset</button>
     <button id="load-preset-button">Load Preset</button>
+    <label style="margin-left:1rem;">
+      Import Queue CSV:
+      <input type="file" id="import-csv" accept=".csv">
+    </label>
+    <button id="export-csv-button" style="margin-left:1rem;">Export Queue CSV</button>
   </div>
 
   <div id="media-controls">
@@ -154,45 +170,34 @@
     </div>
   </div>
 
-  <script>
+   <script>
     const socket = io({ transports: ['websocket'], upgrade: false, secure: true });
 
     // Black & Placeholder
-    document.getElementById('black-button').onclick = () => {
-      socket.emit('transition', { name: 'fade_to_black' });
-    };
-    document.getElementById('placeholder-button').onclick = () => {
-      socket.emit('display_asset', {
-        type: 'slide',
-        name: 'holdingslide.jpg',
-        autoplay: false,
-        fadeIn: false
-      });
-    };
+    document.getElementById('black-button').onclick = () => socket.emit('transition', { name: 'fade_to_black' });
+    document.getElementById('placeholder-button').onclick = () => socket.emit('display_asset', { type: 'slide', name: 'holdingslide.jpg', autoplay: false, fadeIn: false });
 
-    // Drag/Drop assets & transitions
+    // --- Drag/Drop assets & transitions ---
     const assetTiles = document.querySelectorAll('.asset-tile');
     const transitionTiles = document.querySelectorAll('.transition-tile');
     const queueEl = document.getElementById('queue');
     let queue = [], currentIdx = -1;
+    // Preview elements
+    const previewImg = document.getElementById('preview-img');
+    const previewVid = document.getElementById('preview-video');
+    const previewSrc = document.getElementById('preview-source');
 
-    function handleTileDragStart(tile, type) {
+    function handleTileDragStart(tile) {
       tile.addEventListener('dragstart', e => {
-        e.dataTransfer.setData('text/plain', JSON.stringify({
-          type: tile.dataset.type,
-          name: tile.dataset.name
-        }));
+        e.dataTransfer.setData('text/plain', JSON.stringify({ type: tile.dataset.type, name: tile.dataset.name }));
       });
       tile.addEventListener('dblclick', () => {
         queue.push({ type: tile.dataset.type, name: tile.dataset.name });
         renderQueue();
       });
-      tile.addEventListener('click', () => {
-        if(type === "asset") previewQueueItem({ type: tile.dataset.type, name: tile.dataset.name });
-      });
     }
-    assetTiles.forEach(tile => handleTileDragStart(tile, "asset"));
-    transitionTiles.forEach(tile => handleTileDragStart(tile, "transition"));
+    assetTiles.forEach(handleTileDragStart);
+    transitionTiles.forEach(handleTileDragStart);
 
     queueEl.addEventListener('dragover', e => e.preventDefault());
     queueEl.addEventListener('drop', e => {
@@ -202,249 +207,162 @@
       renderQueue();
     });
 
-    function renderQueue() {
-      queueEl.innerHTML = '';
-      queue.forEach((item, i) => {
-        const div = document.createElement('div');
-        div.className = 'queue-tile' + (i === currentIdx ? ' current' : '');
-        div.addEventListener('click', () => {
-          currentIdx = i;
+    // CSV import listener
+    document.getElementById('import-csv').addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: results => {
+          results.data.forEach(row => {
+            queue.push({ type: row.type, name: row.name, fadeOut: row.fadeOut==='true', fadeIn: row.fadeIn==='true', autoplay: row.autoplay==='true' });
+          });
           renderQueue();
-          previewQueueItem(item);
-        });
-        if (item.type === 'slide') {
-          const img = document.createElement('img');
-          img.src = `/static/slides/${item.name}`;
-          div.appendChild(img);
-        } else if (item.type === 'video') {
-          const vid = document.createElement('video');
-          vid.muted = true;
-          vid.src = `/static/media/${item.name}`;
-          div.appendChild(vid);
-        } else if (item.type === 'transition' || item.type === 'cue') {
-          let label = '';
-          if (item.name === 'fade_to_black') label = 'Fade to Black';
-          if (item.name === 'fade_from_black') label = 'Fade from Black';
-          if (item.name === 'crossfade') label = 'Crossfade';
-          if (item.name === 'autoplay_next') label = 'Autoplay Next';
-          const div2 = document.createElement('div');
-          div2.style.cssText = 'background:#000;width:100%;height:60px;display:flex;align-items:center;justify-content:center;';
-          if(item.name === 'fade_from_black') div2.style.background='#444';
-          if(item.name === 'crossfade') div2.style.background='linear-gradient(90deg,#111,#fff,#111)';
-          if(item.name === 'autoplay_next') div2.style.background='#005bb5';
-          div2.innerHTML = `<span class="transition-label" style="color:${item.name==='crossfade'?'black':'white'}">${label}</span>`;
+          alert(`Imported ${results.data.length} items.`);
+        },
+        error: err => alert('CSV parse error: '+err.message)
+      });
+    });
+
+    // Export CSV listener
+    document.getElementById('export-csv-button').addEventListener('click', () => {
+      if (!queue.length) return alert('Queue is empty');
+      const headers=['type','name','fadeOut','fadeIn','autoplay'];
+      const rows = queue.map(item => [item.type,item.name,item.fadeOut?'true':'false',item.fadeIn?'true':'false',item.autoplay?'true':'false']);
+      const csv = [headers, ...rows].map(r=>r.join(',')).join('\n');
+      const blob=new Blob([csv],{type:'text/csv'});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a'); a.href=url; a.download='queue.csv';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    });
+
+    function renderQueue() {
+      queueEl.innerHTML='';
+      queue.forEach((item,i)=>{
+        const div=document.createElement('div'); div.className='queue-tile'+(i===currentIdx?' current':'');
+        div.addEventListener('click',()=>{ currentIdx=i; renderQueue(); previewQueueItem(item); });
+        if(item.type==='slide'){
+          const img=document.createElement('img'); img.src=`/static/slides/${item.name}`; div.appendChild(img);
+        } else if(item.type==='video'){
+          const vid=document.createElement('video'); vid.muted=true; vid.src=`/static/media/${item.name}`; div.appendChild(vid);
+        } else {
+          let label='';
+          if(item.name==='fade_to_black') label='Fade to Black';
+          if(item.name==='fade_from_black') label='Fade from Black';
+          if(item.name==='crossfade') label='Crossfade';
+          if(item.name==='autoplay_next') label='Autoplay Next';
+          const div2=document.createElement('div');
+          div2.style.cssText='background:#000;width:100%;height:60px;display:flex;align-items:center;justify-content:center;';
+          if(item.name==='fade_from_black') div2.style.background='#444';
+          if(item.name==='crossfade') div2.style.background='linear-gradient(90deg,#111,#fff,#111)';
+          if(item.name==='autoplay_next') div2.style.background='#005bb5';
+          div2.innerHTML=`<span class="transition-label" style="color:${item.name==='crossfade'?'black':'white'}">${label}</span>`;
           div.appendChild(div2);
         }
-        const lbl = document.createElement('div');
-        lbl.className = 'tile-label';
-        lbl.textContent = item.name;
-        div.appendChild(lbl);
+        const lbl=document.createElement('div'); lbl.className='tile-label'; lbl.textContent=item.name; div.appendChild(lbl);
         queueEl.appendChild(div);
       });
     }
 
-    // --- Queue Navigation ---
-    function nextInQueue() {
-      if (!queue.length) return alert('Queue is empty');
-      currentIdx = (currentIdx+1)%queue.length;
-      renderQueue();
-      previewQueueItem(queue[currentIdx]);
-    }
-    function prevInQueue() {
-      if (!queue.length) return alert('Queue is empty');
-      currentIdx = (currentIdx-1+queue.length)%queue.length;
-      renderQueue();
-      previewQueueItem(queue[currentIdx]);
-    }
+    // Queue navigation
+    function nextInQueue(){ if(!queue.length)return alert('Queue empty'); currentIdx=(currentIdx+1)%queue.length; renderQueue(); previewQueueItem(queue[currentIdx]); }
+    function prevInQueue(){ if(!queue.length)return alert('Queue empty'); currentIdx=(currentIdx-1+queue.length)%queue.length; renderQueue(); previewQueueItem(queue[currentIdx]); }
+    function step(delta){ socket.emit('change_slide',{index:delta}); }
 
-    function step(delta) {
-      socket.emit('change_slide', { index:delta });
-    }
+    // Send asset
+    let autoplayEnabled=false;
+    function sendCurrent(){ if(currentIdx<0||currentIdx>=queue.length)return alert('Select asset first'); sendAsset(queue[currentIdx],currentIdx); }
+    function sendAsset(asset,idx){ const fadeOut=document.getElementById('fadeout-checkbox').checked; const fadeIn=document.getElementById('fadein-checkbox').checked; const autoplay=document.getElementById('autoplay-checkbox').checked;
+      if (asset.type === 'transition' && asset.name === 'crossfade') {
+      // determine the next asset in the queue
+      const nextIdx = (idx + 1) % queue.length;
+      const nextAsset = queue[nextIdx];
 
-    // --- Send Current Asset (with true crossfade and duration) ---
-    let autoplayEnabled = false;
-    function sendCurrent() {
-      if (currentIdx < 0 || currentIdx >= queue.length) {
-        return alert('Please queue and select an asset first.');
-      }
-      sendAsset(queue[currentIdx], currentIdx);
-    }
-    function sendAsset(asset, idx) {
-      const fadeOut = document.getElementById('fadeout-checkbox').checked;
-      const fadeIn  = document.getElementById('fadein-checkbox').checked;
-      const autoplay= document.getElementById('autoplay-checkbox').checked;
+      if (nextAsset && (nextAsset.type === 'slide' || nextAsset.type === 'video')) {
+        currentIdx = nextIdx;
+        renderQueue();
 
-      if (asset.type === "transition") {
-        if (asset.name === "crossfade") {
-          const nextIdx = (idx + 1) % queue.length;
-          const nextAsset = queue[nextIdx];
-          if (nextAsset && (nextAsset.type === 'slide' || nextAsset.type === 'video')) {
-            currentIdx = nextIdx;
-            renderQueue();
-            let duration = parseFloat(document.getElementById('crossfade-duration').value) || 2.0;
-            socket.emit('crossfade_to', { ...nextAsset, crossfade_duration: duration });
-          }
-        } else {
-          socket.emit('transition', { name: asset.name });
+        // read your duration input
+        const dur = parseFloat(document.getElementById('crossfade-duration').value) || 2.0;
+
+        // emit the full asset payload plus duration
+        socket.emit('crossfade_to', {
+          ...nextAsset,
+          crossfade_duration: dur
+        });
+           updatePreviewArea(nextAsset); // Update preview area - PRE EMPTIVELY CALL UPDATE FUNCTION
         }
-        return;
+          return;
       }
-      if (asset.type === "cue" && asset.name === "autoplay_next") {
-        autoplayEnabled = true;
-        alert("Autoplay Next enabled for next video.");
-        return;
-      }
-      if (fadeOut) {
-        socket.emit('fade_to_black');
-        setTimeout(() => {
-          socket.emit('display_asset', { ...asset, fadeIn, autoplay });
-        }, 850);
-      } else {
-        socket.emit('display_asset', { ...asset, fadeIn, autoplay });
-      }
-      if (asset.type === 'video' && autoplayEnabled) {
-        setupAutoplayListener();
-        autoplayEnabled = false; // one shot
-      }
+      if(asset.type==='cue'&&asset.name==='autoplay_next'){ autoplayEnabled=true; alert('Autoplay Next enabled'); return; }
+      let videoPaused = !autoplay; //Set video paused to opposite of the auto play
+      if(fadeOut){ socket.emit('fade_to_black'); setTimeout(()=>socket.emit('display_asset',{...asset,fadeIn,autoplay, video_paused:videoPaused, video_time:0, video_speed:1}),850); } else socket.emit('display_asset',{...asset,fadeIn,autoplay, video_paused:videoPaused, video_time:0, video_speed:1});
+        updatePreviewArea(asset); //Update asset area
+      if(asset.type==='video'&&autoplayEnabled){ setupAutoplayListener(); autoplayEnabled=false; }
     }
+    function setupAutoplayListener(){ const video=document.getElementById('current-audience-video'); video.onended=function(){ let ni=(currentIdx+1)%queue.length; let na=queue[ni]; if(na&&na.type==='transition'&&na.name==='crossfade'){ let nni=(ni+1)%queue.length; let af=queue[nni]; if(af&&(af.type==='slide'||af.type==='video')){ currentIdx=nni; renderQueue(); let dur=parseFloat(document.getElementById('crossfade-duration').value)||2.0; socket.emit('crossfade_to',{...af,crossfade_duration:dur}); video.onended=null; return; }} if(na&&(na.type==='slide'||na.type==='video')){ currentIdx=ni; renderQueue(); sendAsset(na,currentIdx);} video.onended=null; }; }
 
-    function setupAutoplayListener() {
-      const video = document.getElementById('current-audience-video');
-      video.onended = function() {
-        let nextIdx = (currentIdx + 1) % queue.length;
-        let nextAsset = queue[nextIdx];
-        let lookahead = queue[nextIdx + 1] || {};
-        if (nextAsset && nextAsset.type === 'transition' && nextAsset.name === 'crossfade') {
-          const nextNextIdx = (nextIdx + 1) % queue.length;
-          const assetToFade = queue[nextNextIdx];
-          if (assetToFade && (assetToFade.type === 'slide' || assetToFade.type === 'video')) {
-            currentIdx = nextNextIdx;
-            renderQueue();
-            let duration = parseFloat(document.getElementById('crossfade-duration').value) || 2.0;
-            socket.emit('crossfade_to', { ...assetToFade, crossfade_duration: duration });
-            video.onended = null;
-            return;
-          }
-        }
-        if (nextAsset && (nextAsset.type === 'slide' || nextAsset.type === 'video')) {
-          currentIdx = nextIdx;
-          renderQueue();
-          sendAsset(nextAsset, currentIdx);
-        }
-        video.onended = null;
-      };
-    }
+    // Preview
+    function previewQueueItem(item){ if(item.type==='slide'){ previewImg.style.display='block'; previewImg.src=`/static/slides/${item.name}`; previewVid.style.display='none'; } else if(item.type==='video'){ previewVid.style.display='block'; previewSrc.src=`/static/media/${item.name}`; previewVid.load(); previewImg.style.display='none'; } else { previewImg.style.display='none'; previewVid.style.display='none'; }}
 
-    // --- Preview logic (your prior implementation) ---
-    const previewImg   = document.getElementById('preview-img');
-    const previewVid   = document.getElementById('preview-video');
-    const previewSrc   = document.getElementById('preview-source');
-    function previewQueueItem(item) {
-      if (item.type === 'slide') {
-        previewVid.style.display = 'none';
-        previewImg.src = `/static/slides/${item.name}`;
-        previewImg.style.display = 'block';
-      } else if (item.type === 'video') {
-        previewImg.style.display = 'none';
-        previewSrc.src = `/static/media/${item.name}`;
-        previewVid.load();
-        previewVid.style.display = 'block';
-      } else {
-        previewVid.style.display = 'none';
-        previewImg.style.display = 'none';
-      }
-    }
-
-    // --- Live Audience View Reflection ---
-    socket.on('sync_state', updateAudiencePanel);
-    socket.on('display_asset', updateAudiencePanel);
-    socket.on('play_pause_video', updateAudiencePanel);
-    socket.on('set_playback_speed', updateAudiencePanel);
-    socket.on('seek_video', updateAudiencePanel);
+    // Audience reflection
+    socket.on('sync_state',updateAudiencePanel);
+    socket.on('display_asset',updateAudiencePanel);
+    socket.on('play_pause_video',updateAudiencePanel);
+    socket.on('set_playback_speed',asset=>updateAudiencePanel(asset));
+    socket.on('seek_video',({time})=>updateAudiencePanel({video_time:time}));
+    socket.on('crossfade_to',asset=>updateAudiencePanel(asset));
+    socket.on('fade_to_black',()=>{ const c=document.getElementById('current-audience-container'); c.style.background='black'; document.getElementById('current-audience-img').style.display='none'; document.getElementById('current-audience-video').style.display='none'; });
+    socket.on('fade_from_black',()=>{ document.getElementById('current-audience-container').style.background=''; });
 
     function updateAudiencePanel(asset) {
-      if (!asset) return;
-      const currentAudienceImg = document.getElementById('current-audience-img');
-      const currentAudienceVid = document.getElementById('current-audience-video');
-      const currentAudienceSrc = document.getElementById('current-audience-source');
-      if (asset.type === 'slide') {
-        currentAudienceVid.style.display = 'none';
-        currentAudienceImg.src = `/static/slides/${asset.name}`;
-        currentAudienceImg.style.display = 'block';
-      } else if (asset.type === 'video') {
-        currentAudienceImg.style.display = 'none';
-        currentAudienceSrc.src = `/static/media/${asset.name}`;
-        currentAudienceVid.load();
-        currentAudienceVid.style.display = 'block';
-        currentAudienceVid.muted = true;
-        currentAudienceVid.onloadedmetadata = function() {
-          currentAudienceVid.currentTime = asset.video_time || 0;
-          currentAudienceVid.playbackRate = asset.video_speed || 1.0;
-          if (!asset.video_paused || asset.autoplay) {
-            currentAudienceVid.play().catch(()=>{});
-          } else {
-            currentAudienceVid.pause();
-          }
-        };
-      }
-    }
+        if (!asset) return;
+        const ci = document.getElementById('current-audience-img');
+        const cv = document.getElementById('current-audience-video');
+        const cs = document.getElementById('current-audience-source');
 
-    // --- Sortable Queue ---
-    new Sortable(queueEl, {
-      animation: 150,
-      onEnd: function (evt) {
-        const temp = queue[evt.oldIndex];
-        queue.splice(evt.oldIndex, 1);
-        queue.splice(evt.newIndex, 0, temp);
-        if (currentIdx === evt.oldIndex) {
-          currentIdx = evt.newIndex;
-        } else if (evt.oldIndex < currentIdx && evt.newIndex >= currentIdx) {
-          currentIdx--;
-        } else if (evt.oldIndex > currentIdx && evt.newIndex <= currentIdx) {
-          currentIdx++;
+        if (asset.type === 'slide') {
+            cv.style.display = 'none';
+            ci.src = `/static/slides/${asset.name}`;
+            ci.style.display = 'block';
+        } else if (asset.type === 'video') {
+            ci.style.display = 'none';
+            cs.src = `/static/media/${asset.name}`;
+            cv.load();
+            cv.style.display = 'block';
+            cv.muted = true;
+
+            cv.onloadedmetadata = function () {
+                cv.currentTime = asset.video_time || 0;
+                cv.playbackRate = asset.video_speed || 1.0;
+                if (!asset.video_paused || asset.autoplay) {
+                    cv.play().catch(() => { });
+                } else {
+                    cv.pause();
+                }
+            };
         }
-        renderQueue();
-      }
-    });
-
-    // --- Keyboard Shortcuts ---
-    const playPauseBtn = document.getElementById('play-pause-button');
-    document.addEventListener('keydown', function(event) {
-      if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
-      if (event.key === 'ArrowRight') {
-        nextInQueue();
-        event.preventDefault();
-      } else if (event.key === 'ArrowLeft') {
-        prevInQueue();
-        event.preventDefault();
-      } else if (event.key === 'Enter') {
-        sendCurrent();
-        event.preventDefault();
-      } else if (event.code === 'Space') {
-        playPauseBtn.click();
-        event.preventDefault();
-      }
-    });
-
-    // Play/Pause button logic
-    playPauseBtn.onclick = () => {
-      const video = document.getElementById('current-audience-video');
-      if (video.style.display === 'block') {
-        if (video.paused) { video.play(); } else { video.pause(); }
-      }
-      socket.emit('play_pause_video');
-    };
-
-    // --- INIT ---
-    // Sticky crossfade duration
-    const crossfadeInput = document.getElementById('crossfade-duration');
-    if (localStorage.getItem('crossfade_duration')) {
-      crossfadeInput.value = localStorage.getItem('crossfade_duration');
     }
-    crossfadeInput.onchange = () => {
-      localStorage.setItem('crossfade_duration', crossfadeInput.value);
-    };
+
+    //Add this new function to update the preview
+    function updatePreviewArea(asset){
+        socket.emit('sync_state',asset)
+    }
+
+    // Sortable
+    new Sortable(queueEl,{ animation:150,onEnd(evt){ const t=queue[evt.oldIndex]; queue.splice(evt.oldIndex,1); queue.splice(evt.newIndex,0,t); if(currentIdx===evt.oldIndex) currentIdx=evt.newIndex; else if(evt.oldIndex<currentIdx&&evt.newIndex>=currentIdx) currentIdx--; else if(evt.oldIndex>currentIdx&&evt.newIndex<=currentIdx) currentIdx++; renderQueue(); }});
+
+    // Keyboard & init
+    const playPauseBtn=document.getElementById('play-pause-button');
+    document.addEventListener('keydown',e=>{ if(['INPUT','TEXTAREA'].includes(document.activeElement.tagName))return; if(e.key==='ArrowRight'){ nextInQueue(); e.preventDefault(); } else if(e.key==='ArrowLeft'){ prevInQueue(); e.preventDefault(); } else if(e.key==='Enter'){ sendCurrent(); e.preventDefault(); } else if(e.code==='Space'){ playPauseBtn.click(); e.preventDefault(); }});
+    playPauseBtn.onclick=()=>{ const v=document.getElementById('current-audience-video'); if(v.style.display==='block'){ v.paused?v.play():v.pause(); } socket.emit('play_pause_video'); };
+    const crossfadeInput=document.getElementById('crossfade-duration'); if(localStorage.getItem('crossfade_duration')) crossfadeInput.value=localStorage.getItem('crossfade_duration'); crossfadeInput.onchange=()=>localStorage.setItem('crossfade_duration',crossfadeInput.value);
     renderQueue();
+
+      //Emit sync state
+    socket.emit('sync_state', { type: 'slide', name: 'holdingslide.jpg', autoplay: false, fadeIn: false });
+
   </script>
 </body>
 </html>

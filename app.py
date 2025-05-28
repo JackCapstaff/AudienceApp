@@ -2,6 +2,12 @@ import os
 import time
 from flask import Flask, render_template, send_from_directory
 from flask_socketio import SocketIO, emit
+from flask import Flask, render_template, request, redirect, url_for, session, flash
+from flask import request
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or os.urandom(24)
@@ -11,6 +17,59 @@ socketio = SocketIO(
     message_queue=redis_url,
     cors_allowed_origins="*"
 )
+
+
+# Load environment variables from a .env file (if using one)
+
+
+
+# Credentials must be provided via environment variables
+VALID_USER = os.environ['CONTROL_USER']
+VALID_PASS = os.environ['CONTROL_PASS']
+
+# Decorator to protect routes
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('authenticated'):
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        if username == VALID_USER and password == VALID_PASS:
+            session['authenticated'] = True
+            flash('Logged in successfully', 'success')
+            return redirect(url_for('control'))
+        else:
+            flash('Invalid credentials', 'danger')
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.pop('authenticated', None)
+    flash('You have been logged out', 'info')
+    return redirect(url_for('login'))
+
+
+@app.route('/control')
+def control():
+    # Ensure user is authenticated
+    if not session.get('authenticated'):
+        return redirect(url_for('login'))
+    # Existing control logic follows
+    
+    slides_dir = os.path.join(app.root_path, 'static', 'slides')
+    slides = sorted(f for f in os.listdir(slides_dir)
+                    if f.lower().endswith(('.png', '.jpg', '.jpeg')))
+    media_dir = os.path.join(app.root_path, 'static', 'media')
+    videos = sorted(f for f in os.listdir(media_dir)
+                    if f.lower().endswith(('.mp4', '.webm', '.ogg')))
+    return render_template('control.html', slides=slides, videos=videos)
 
 # --- In-memory current state (reset on restart!) ---
 current_asset = {
@@ -50,14 +109,7 @@ def get_video_current_time():
     return 0.0
 
 @app.route('/control')
-def control():
-    slides_dir = os.path.join(app.root_path, 'static', 'slides')
-    slides = sorted(f for f in os.listdir(slides_dir)
-                    if f.lower().endswith(('.png', '.jpg', '.jpeg')))
-    media_dir = os.path.join(app.root_path, 'static', 'media')
-    videos = sorted(f for f in os.listdir(media_dir)
-                    if f.lower().endswith(('.mp4', '.webm', '.ogg')))
-    return render_template('control.html', slides=slides, videos=videos)
+
 
 @app.route('/')
 def audience():
@@ -110,8 +162,12 @@ def on_transition(data):
     emit('transition', data, broadcast=True)
 
 @socketio.on('crossfade_to')
-def on_crossfade_to(asset):
-    emit('crossfade_to', asset, broadcast=True)
+def handle_crossfade_to(asset):
+    # optional debug log
+    print(f"[CONTROL → AUDIENCE] crossfade_to → {asset}")
+    # send to all connected clients *except* the one who triggered this
+    socketio.emit('crossfade_to', asset, skip_sid=request.sid)
+
 
 @socketio.on('fade_to_black')
 def on_fade_to_black():
