@@ -156,6 +156,16 @@
         crossfadeTo(asset);
     });
 
+    socket.on('display_asset', asset => {
+      if(asset.type === 'black') {
+        // Hide images and videos, show a black div/section
+        img.style.display = 'none';
+        vid.style.display = 'none';
+        blackDiv.style.display = 'block'; // (Or just set container's background to black)
+      }
+      // ... handle slides/videos as usual
+    });
+
     socket.on('sync_state', asset => {
         if (asset.name === crossfadePending) {
             crossfadePending = null;

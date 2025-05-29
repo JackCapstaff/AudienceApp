@@ -10,6 +10,7 @@
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
   <!-- PapaParse for CSV import -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.1/papaparse.min.js"></script>
+  
   <style>
     body { font-family: sans-serif; padding:1rem; }
     h1 { margin-top: 0; }
@@ -98,6 +99,23 @@
     .queue-tile .autoplay-toggle.on {
       background: #34c759;
     }
+    .live-idx-badge {
+      position: relative;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #ffd600;
+      color: #222;
+      font-size: 0.82em;
+      padding: 1px 6px;
+      border-radius: 1em;
+      font-weight: bold;
+      z-index: 3;
+      margin-bottom: 2px;
+      pointer-events: none;
+      display: inline-block;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
@@ -131,6 +149,7 @@
 
   <h2>Asset Library (drag into queue)</h2>
   <div id="asset-grid">
+    
     {% for slide in slides %}
       <div class="asset-tile" draggable="true" data-type="slide" data-name="{{ slide }}">
         <img src="/static/slides/{{ slide }}" alt="{{ slide }}"/>
@@ -207,6 +226,8 @@
 
   <div id="current-audience-container">
     <h2>Current Audience View</h2>
+    <div id="audience-live-index" style="font-size:2.8em;color:#ffd600;font-weight:bold;text-align:center;"></div>
+
     <iframe
       src="/"
       id="audience-iframe"
@@ -217,6 +238,8 @@
   </div>
     <div id="preview-container">
       <h2>Preview</h2>
+      <div id="preview-live-index" style="font-size:2em;color:#ffd600;font-weight:bold;text-align:center;"></div>
+
       <img id="preview-img" alt="Slide preview"/>
       <video id="preview-video" controls>
         <source id="preview-source" src="" type="video/mp4">
@@ -226,6 +249,9 @@
 
    <script>
     const socket = io({ transports: ['websocket'], upgrade: false, secure: true });
+
+    let liveAsset = null; // The asset currently shown to the audience
+    let liveIdx = -1;     // Its index in the queue
 
     // Black & Placeholder
     document.getElementById('black-button').onclick = () => {
@@ -336,15 +362,124 @@
       document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
     });
 
+    function getLiveAssetIndex(asset) {
+      let idx = 0, liveNum = 1;
+      for (; idx < queue.length; idx++) {
+        const item = queue[idx];
+        if (
+          (item.type === 'slide' || item.type === 'video' || (item.type === 'transition' && item.name === 'fade_to_black')) &&
+          asset && item.name === asset.name && item.type === asset.type
+        ) {
+          return liveNum;
+        }
+        if (item.type === 'slide' || item.type === 'video' || (item.type === 'transition' && item.name === 'fade_to_black')) {
+          liveNum++;
+        }
+      }
+      return null;
+    }
+
+    function getPreviewAsset(liveIdx, currentIdx) {
+      if (!queue.length) return null;
+
+      // Special case: highlighted is fade_from_black
+      if (queue[currentIdx] && queue[currentIdx].type === 'transition' && queue[currentIdx].name === 'fade_from_black') {
+        let idx2 = (currentIdx + 1) % queue.length;
+        for (let t2 = 0; t2 < queue.length; t2++) {
+          if (queue[idx2].type === 'slide' || queue[idx2].type === 'video') {
+            return queue[idx2];
+          }
+          idx2 = (idx2 + 1) % queue.length;
+        }
+        return null;
+      }
+
+      // Special case: highlighted is fade_to_black
+      if (queue[currentIdx] && queue[currentIdx].type === 'transition' && queue[currentIdx].name === 'fade_to_black') {
+        return { type: 'black' };
+      }
+
+      // Special case: highlighted is crossfade
+      if (queue[currentIdx] && queue[currentIdx].type === 'transition' && queue[currentIdx].name === 'crossfade') {
+        let idx2 = (currentIdx + 1) % queue.length;
+        for (let t2 = 0; t2 < queue.length; t2++) {
+          if (queue[idx2].type === 'slide' || queue[idx2].type === 'video') {
+            return queue[idx2];
+          }
+          idx2 = (idx2 + 1) % queue.length;
+        }
+        return null;
+      }
+
+      // If audience is black, preview first asset after next fade_from_black
+      if (liveAsset && liveAsset.type === 'black') {
+        let idx = currentIdx;
+        for (let tries = 0; tries < queue.length; tries++) {
+          if (queue[idx] && queue[idx].type === 'transition' && queue[idx].name === 'fade_from_black') {
+            let idx2 = (idx + 1) % queue.length;
+            for (let t2 = 0; t2 < queue.length; t2++) {
+              if (queue[idx2].type === 'slide' || queue[idx2].type === 'video') {
+                return queue[idx2];
+              }
+              idx2 = (idx2 + 1) % queue.length;
+            }
+            break;
+          }
+          idx = (idx + 1) % queue.length;
+        }
+        // If no fade_from_black found, fallback to next slide/video
+        return getFirstNonTransitionAfter(currentIdx);
+      }
+
+      // If highlighted matches live asset
+      if (liveIdx !== -1 && currentIdx === liveIdx) {
+        let idx = (currentIdx + 1) % queue.length;
+        if (queue[idx]) {
+          if (queue[idx].type === 'transition' && queue[idx].name === 'fade_to_black') return { type: 'black' };
+          if (queue[idx].type === 'transition' && (queue[idx].name === 'fade_from_black' || queue[idx].name === 'crossfade')) {
+            // Return next visible asset after this transition
+            let idx2 = (idx + 1) % queue.length;
+            for (let t2 = 0; t2 < queue.length; t2++) {
+              if (queue[idx2].type === 'slide' || queue[idx2].type === 'video') {
+                return queue[idx2];
+              }
+              idx2 = (idx2 + 1) % queue.length;
+            }
+            return null;
+          }
+          if (queue[idx].type === 'slide' || queue[idx].type === 'video') {
+            return queue[idx];
+          }
+        }
+        // Default: fallback to next slide/video
+        return getFirstNonTransitionAfter(currentIdx);
+      }
+
+      // If highlighted is a slide or video, preview it
+      if (queue[currentIdx] && (queue[currentIdx].type === 'slide' || queue[currentIdx].type === 'video')) {
+        return queue[currentIdx];
+      }
+
+      // Fallback
+      return getStablePreviewForIndex(currentIdx);
+    }
+
+
+
+
     function renderQueue() {
-      queueEl.innerHTML = '';
-      queue.forEach((item, i) => {
-        const div = document.createElement('div');
-        div.className = 'queue-tile' + (i === currentIdx ? ' current' : '');
-        div.addEventListener('click', () => {
-          currentIdx = i;
-          renderQueue();
-        });
+    queueEl.innerHTML = '';
+    let liveNum = 1; // 1-based numbering
+
+    queue.forEach((item, i) => {
+      const div = document.createElement('div');
+      div.className = 'queue-tile' + (i === currentIdx ? ' current' : '');
+      div.addEventListener('click', () => {
+        currentIdx = i;
+        renderQueue();
+      });
+
+        
 
         // Render the asset or transition tile
         if (item.type === 'slide') {
@@ -374,6 +509,22 @@
         lbl.className = 'tile-label';
         lbl.textContent = item.name;
         div.appendChild(lbl);
+
+        // --- Add live index badge for slide, video, or fade_to_black ---
+        let showLiveIdx = false;
+        if (
+          item.type === 'slide' ||
+          item.type === 'video' ||
+          (item.type === 'transition' && item.name === 'fade_to_black')
+        ) {
+          showLiveIdx = true;
+          const badge = document.createElement('div');
+          badge.className = 'live-idx-badge';
+          badge.textContent = liveNum;
+          badge.title = `Live Index: ${liveNum}`;
+          div.appendChild(badge);
+          liveNum++;
+        }
 
         const autoBtn = document.createElement('button');
           autoBtn.className = 'autoplay-toggle' + (item.autoplay ? ' on' : '');
@@ -405,15 +556,120 @@
       });
 
       // ------ Preview logic (this is the important part) ------
-      if (queue[currentIdx]) {
-        let toPreview = queue[currentIdx];
-        if (toPreview.type === 'transition') {
-          let nonTrans = getFirstNonTransitionAfter(currentIdx);
-          if (nonTrans) toPreview = nonTrans;
+      // Determine which index to preview
+
+      console.log(`[renderQueue] currentIdx: ${currentIdx}, liveIdx: ${liveIdx}`);
+
+      // Determine which index to preview
+      // Improved preview logic: use new getPreviewAsset
+      const toPreview = getPreviewAsset(liveIdx, currentIdx);
+
+      if (toPreview) {
+        if (toPreview.type === 'black') {
+          console.log(`[renderQueue] Preview: BLACK`);
+          previewImg.style.display = 'none';
+          previewVid.style.display = 'none';
+          document.getElementById('preview-container').style.background = 'black';
+        } else if (toPreview.type === 'slide') {
+          console.log(`[renderQueue] Preview: type=slide, name=${toPreview.name}`);
+          previewImg.style.display = 'block';
+          previewImg.src = `/static/slides/${toPreview.name}`;
+          previewVid.style.display = 'none';
+          document.getElementById('preview-container').style.background = '';
+        } else if (toPreview.type === 'video') {
+          console.log(`[renderQueue] Preview: type=video, name=${toPreview.name}`);
+          previewVid.style.display = 'block';
+          previewSrc.src = `/static/media/${toPreview.name}`;
+          previewVid.load();
+          previewImg.style.display = 'none';
+          document.getElementById('preview-container').style.background = '';
         }
-        previewQueueItem(toPreview);
+      } else {
+        console.log(`[renderQueue] Preview: NONE`);
+        previewImg.style.display = 'none';
+        previewVid.style.display = 'none';
+        document.getElementById('preview-container').style.background = '';
+      }
+      // Find preview index
+      let previewIndex = toPreview ? getLiveAssetIndex(toPreview) : '';
+      document.getElementById('preview-live-index').textContent = previewIndex ? previewIndex : '';
+
+      let liveIdxNum = liveAsset ? getLiveAssetIndex(liveAsset) : '';
+      document.getElementById('audience-live-index').textContent = liveIdxNum ? liveIdxNum : '';
+
+    }
+
+    function getFirstNonTransitionAfter(idx) {
+      if (!queue.length) return null;
+      let i = (idx + 1) % queue.length;
+      for (let tries = 0; tries < queue.length; tries++) {
+        if (queue[i].type === 'slide' || queue[i].type === 'video') return queue[i];
+        i = (i + 1) % queue.length;
+      }
+      return null;
+    }
+
+
+    function getStablePreviewForIndex(idx) {
+      if (!queue.length) return null;
+      let item = queue[idx];
+      if (!item) return null;
+
+      if (item.type === 'slide' || item.type === 'video') {
+        return item;
+      }
+      if (item.type === 'transition') {
+        if (item.name === 'fade_to_black') {
+          return { type: 'black' };
+        }
+        if (item.name === 'crossfade' || item.name === 'fade_from_black') {
+          // Preview the next non-transition asset after this transition
+          let nextIdx = (idx + 1) % queue.length;
+          for (let tries = 0; tries < queue.length; tries++) {
+            let nextItem = queue[nextIdx];
+            if (nextItem.type === 'slide' || nextItem.type === 'video') {
+              return nextItem;
+            }
+            nextIdx = (nextIdx + 1) % queue.length;
+          }
+          return null;
+        }
+        // Other transitions: preview nothing
+        return null;
+      }
+      return null;
+    }
+
+    function setLiveAsset(asset) {
+      liveAsset = asset;
+      if (!asset) {
+        liveIdx = -1;
+        console.log('[Live Asset] Set to: null');
+        return;
+      }
+      if (asset.type === 'black') {
+        liveIdx = -1;
+        console.log('[Live Asset] Set to: BLACK');
+        return;
+      }
+      // Find index in queue matching asset
+      liveIdx = queue.findIndex(item => item && item.name === asset.name && item.type === asset.type);
+      if (liveIdx !== -1) {
+        console.log(`[Live Asset] Set to: idx=${liveIdx}, type=${asset.type}, name=${asset.name}`);
+      } else {
+        console.log(`[Live Asset] Set to: NOT FOUND in queue. type=${asset.type}, name=${asset.name}`);
       }
     }
+
+    
+
+    function updateLiveIndexDisplay() {
+      const el = document.getElementById('audience-live-index');
+      const idx = getLiveAssetIndex(liveAsset);
+      el.textContent = idx ? idx : '';
+    }
+
+
 
     // Queue navigation
     function nextInQueue() {
@@ -538,16 +794,13 @@
     function previewQueueItem(item){ if(item.type==='slide'){ previewImg.style.display='block'; previewImg.src=`/static/slides/${item.name}`; previewVid.style.display='none'; } else if(item.type==='video'){ previewVid.style.display='block'; previewSrc.src=`/static/media/${item.name}`; previewVid.load(); previewImg.style.display='none'; } else { previewImg.style.display='none'; previewVid.style.display='none'; }}
 
     // Audience reflection
-    socket.on('sync_state',updateAudiencePanel);
+    
     socket.on('viewer_count_update', data => {
       console.log('Viewer count updated:', data);
       document.getElementById('viewer-count').textContent = data.count;
     });
-    socket.on('display_asset',updateAudiencePanel);
-    socket.on('play_pause_video',updateAudiencePanel);
-    socket.on('set_playback_speed',asset=>updateAudiencePanel(asset));
-    socket.on('seek_video',({time})=>updateAudiencePanel({video_time:time}));
-    socket.on('crossfade_to', updateAudiencePanel);
+    
+    
     
     socket.on('fade_to_black', function(data) {
       const c = document.getElementById('current-audience-container');
@@ -558,34 +811,7 @@
     socket.on('fade_from_black', function(data) {
       document.getElementById('current-audience-container').style.background = '';
     });
-    function updateAudiencePanel(asset) {
-        if (!asset) return;
-        const ci = document.getElementById('current-audience-img');
-        const cv = document.getElementById('current-audience-video');
-        const cs = document.getElementById('current-audience-source');
-
-        if (asset.type === 'slide') {
-            cv.style.display = 'none';
-            ci.src = `/static/slides/${asset.name}`;
-            ci.style.display = 'block';
-        } else if (asset.type === 'video') {
-            ci.style.display = 'none';
-            cs.src = `/static/media/${asset.name}`;
-            cv.load();
-            cv.style.display = 'block';
-            cv.muted = true;
-
-            cv.onloadedmetadata = function () {
-                cv.currentTime = asset.video_time || 0;
-                cv.playbackRate = asset.video_speed || 1.0;
-                if (!asset.video_paused || asset.autoplay) {
-                    cv.play().catch(() => { });
-                } else {
-                    cv.pause();
-                }
-            };
-        }
-    }
+    
 
     //Add this new function to update the preview
     function updatePreviewArea(asset){
@@ -606,9 +832,18 @@
     new Sortable(queueEl,{ animation:150,onEnd(evt){ const t=queue[evt.oldIndex]; queue.splice(evt.oldIndex,1); queue.splice(evt.newIndex,0,t); if(currentIdx===evt.oldIndex) currentIdx=evt.newIndex; else if(evt.oldIndex<currentIdx&&evt.newIndex>=currentIdx) currentIdx--; else if(evt.oldIndex>currentIdx&&evt.newIndex<=currentIdx) currentIdx++; renderQueue(); }});
 
     
-
+      
     // Keyboard & init
     const playPauseBtn=document.getElementById('play-pause-button');
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Delete' && currentIdx >= 0 && currentIdx < queue.length) {
+        queue.splice(currentIdx, 1);
+        // Adjust currentIdx if needed
+        if (currentIdx >= queue.length) currentIdx = queue.length - 1;
+        renderQueue();
+      }
+    });
+
     document.addEventListener('keydown',e=>{
       if(['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) return;
 
@@ -657,5 +892,27 @@
     socket.emit('sync_state', { type: 'slide', name: 'holdingslide.jpg', autoplay: false, fadeIn: false });
 
   </script>
+
+  <script>
+    socket.on('display_asset', asset => {
+      setLiveAsset(asset);
+      
+      renderQueue();
+    });
+    socket.on('crossfade_to', asset => {
+      setLiveAsset(asset);
+      
+      renderQueue();
+    });
+    socket.on('fade_to_black', () => {
+      setLiveAsset({ type: 'black' }); // Treat black as a "live" state
+      
+      renderQueue();
+    });
+    socket.on('fade_from_black', () => {
+      // Nothing special: next real asset will update this
+    });
+  </script>
+  
 </body>
 </html>
