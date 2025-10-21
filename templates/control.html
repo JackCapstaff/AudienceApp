@@ -1106,8 +1106,7 @@
     const crossfadeInput=document.getElementById('crossfade-duration'); if(localStorage.getItem('crossfade_duration')) crossfadeInput.value=localStorage.getItem('crossfade_duration'); crossfadeInput.onchange=()=>localStorage.setItem('crossfade_duration',crossfadeInput.value);
     renderQueue();
 
-      //Emit sync state
-    socket.emit('sync_state', { type: 'slide', name: 'holdingslide.jpg', autoplay: false, fadeIn: false });
+
 
     socket.on('display_asset', asset => {
       setLiveAsset(asset);
