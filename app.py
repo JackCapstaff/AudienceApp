@@ -192,7 +192,13 @@ def on_display_asset(data):
     asset = current_asset.copy()
     if asset['type'] == 'video':
         asset['video_time'] = get_video_current_time()
-    emit('display_asset', asset, broadcast=True)
+    emit('display_asset', {
+        'type': data.get('type'),
+        'name': data.get('name'),
+        'autoplay': data.get('autoplay', False),
+        'fadeIn': data.get('fadeIn', False),
+        'id': data.get('id')  # propagate unique id!
+    }, broadcast=True)
 
 @socketio.on('transition')
 def on_transition(data):
@@ -201,14 +207,21 @@ def on_transition(data):
 @socketio.on('crossfade_to')
 def handle_crossfade_to(asset):
     # optional debug log
-    print(f"[CONTROL → AUDIENCE] crossfade_to → {asset}")
-    # send to all connected clients *except* the one who triggered this
-    socketio.emit('crossfade_to', asset, skip_sid=request.sid)
+    print(f"[CONTROL → ALL] crossfade_to → {asset}")
+
+    # Send to all connected clients (including the control panel)
+    socketio.emit('crossfade_to', asset)
+
+    # Send to the control panel (excluding the sender)
+    socketio.emit('crossfade_to_control', asset)
+
+
 
 
 @socketio.on('fade_to_black')
 def on_fade_to_black(data=None):
     emit('fade_to_black', data or {}, broadcast=True)
+    emit('fade_to_black_control', data or {}, broadcast=True)
 
 @socketio.on('fade_from_black')
 def on_fade_from_black(data=None):

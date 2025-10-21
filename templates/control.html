@@ -38,16 +38,45 @@
     }
     #send-options, #queue-controls { margin:0.5rem 0; }
     #send-options label, #queue-controls button { margin-right:0.5rem; }
+    
     #preview-container, #current-audience-container {
-      border: 1px solid #ccc; padding: 0.5rem; margin-bottom: 0.5rem;
-      width: 48%; box-sizing: border-box;
+      flex: 1 1 380px;
+      min-width: 320px;
+      max-width: 600px;  /* Prevents from growing too wide */
+      box-sizing: border-box;
+      overflow: hidden;   /* Make sure overflow is clipped */
     }
-    #preview-area {
-      display: flex; justify-content: space-between; width: 100%;
+
+    #preview-img, #preview-video, #current-audience-img, #current-audience-video {
+      width: 100%;
+      max-width: 100%;
+      height: auto;
+      max-height: 320px;   /* or whatever height you prefer */
+      object-fit: contain;
+      display: block;
+      margin: 0 auto;
     }
-    #current-audience-img, #current-audience-video, #preview-img, #preview-video {
-      max-width: 100%; display: none;
+
+    #view-panels {
+      display: flex;
+      gap: 1.2rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+      align-items: flex-start;
     }
+
+    @media (max-width: 900px) {
+      #view-panels {
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      #preview-container, #current-audience-container {
+        min-width: 0;
+        max-width: 100%;
+        width: 100%;
+      }
+    }
+    
     #media-controls { margin-top: 1rem; }
     #media-scrubber { width: 220px; vertical-align: middle; }
     #media-time { font-family: monospace; margin-left: 0.4em; }
@@ -224,28 +253,28 @@
     <span id="media-time">00:00 / 00:00</span>
   </div>
 
-  <div id="current-audience-container">
-    <h2>Current Audience View</h2>
-    <div id="audience-live-index" style="font-size:2.8em;color:#ffd600;font-weight:bold;text-align:center;"></div>
-
-    <iframe
-      src="/"
-      id="audience-iframe"
-      style="width:100%;height:320px;border:1px solid #ccc;background:black;border-radius:6px;"
-      title="Audience Live View"
-      allowfullscreen
-    ></iframe>
-  </div>
+  <div id="view-panels">
+    <div id="current-audience-container">
+      <h2>Current Audience View</h2>
+      <div id="audience-live-index" style="font-size:2em;color:#ffd600;font-weight:bold;text-align:center;"></div>
+      <iframe
+        src="/"
+        id="audience-iframe"
+        style="width:100%;height:320px;border:1px solid #ccc;background:black;border-radius:6px;"
+        title="Audience Live View"
+        allowfullscreen
+      ></iframe>
+    </div>
     <div id="preview-container">
       <h2>Preview</h2>
       <div id="preview-live-index" style="font-size:2em;color:#ffd600;font-weight:bold;text-align:center;"></div>
-
       <img id="preview-img" alt="Slide preview"/>
       <video id="preview-video" controls>
         <source id="preview-source" src="" type="video/mp4">
       </video>
     </div>
   </div>
+
 
    <script>
     const socket = io({ transports: ['websocket'], upgrade: false, secure: true });
@@ -255,9 +284,11 @@
 
     // Black & Placeholder
     document.getElementById('black-button').onclick = () => {
-      // Get duration (could add an input for this)
       const dur = parseFloat(document.getElementById('fade-black-duration')?.value) || 0.8;
       socket.emit('fade_to_black', { duration: dur });
+      setTimeout(() => {
+        showBlackScreen();
+      }, dur * 1000 + 20); // After overlay fade completes
     };
 
     document.getElementById('placeholder-button').onclick = () => socket.emit('display_asset', { type: 'slide', name: 'holdingslide.jpg', autoplay: false, fadeIn: false });
@@ -273,21 +304,35 @@
     const previewSrc = document.getElementById('preview-source');
 
     function handleTileDragStart(tile) {
-      tile.addEventListener('dragstart', e => {
-        e.dataTransfer.setData('text/plain', JSON.stringify({ type: tile.dataset.type, name: tile.dataset.name }));
+    tile.addEventListener('dragstart', e => {
+      e.dataTransfer.setData('text/plain', JSON.stringify({ 
+        type: tile.dataset.type, 
+        name: tile.dataset.name, 
+        id: uuidv4(),
+        autoplay: false, 
+        autoDuration: 8 // assign new id for each new tile added
+      }));
+    });
+    tile.addEventListener('dblclick', () => {
+      queue.push({
+        type: tile.dataset.type,
+        name: tile.dataset.name,
+        id: uuidv4(),
+        autoplay: false,
+        autoDuration: tile.dataset.type === 'slide' ? 8 : undefined // default 8s for slides
       });
-      tile.addEventListener('dblclick', () => {
-        queue.push({ type: tile.dataset.type, name: tile.dataset.name });
-        renderQueue();
-      });
-    }
+      renderQueue();
+    });
+  }
     assetTiles.forEach(handleTileDragStart);
     transitionTiles.forEach(handleTileDragStart);
 
     queueEl.addEventListener('dragover', e => e.preventDefault());
     queueEl.addEventListener('drop', e => {
       e.preventDefault();
-      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+      let data = JSON.parse(e.dataTransfer.getData('text/plain'));
+      if (!data.id) data.id = uuidv4();
+      if (data.type === 'slide' && !('autoDuration' in data)) data.autoDuration = 8; // set default
       queue.push(data);
       renderQueue();
     });
@@ -331,12 +376,15 @@
         skipEmptyLines: true,
         complete: results => {
           results.data.forEach(row => {
+            // assign id if missing
             queue.push({
               type: row.type,
               name: row.name,
               fadeOut: row.fadeOut === 'true',
               fadeIn: row.fadeIn === 'true',
-              autoplay: row.autoplay === 'true'
+              autoplay: row.autoplay === 'true',
+              id: row.id || uuidv4(),
+              autoDuration: row.autoDuration ? Number(row.autoDuration) : (row.type === 'slide' ? 8 : undefined)
             });
           });
           renderQueue();
@@ -353,8 +401,16 @@
     // Export CSV listener
     document.getElementById('export-csv-button').addEventListener('click', () => {
       if (!queue.length) return alert('Queue is empty');
-      const headers=['type','name','fadeOut','fadeIn','autoplay'];
-      const rows = queue.map(item => [item.type,item.name,item.fadeOut?'true':'false',item.fadeIn?'true':'false',item.autoplay?'true':'false']);
+      const headers=['type','name','fadeOut','fadeIn','autoplay','autoDuration','id'];
+      const rows = queue.map(item => [
+        item.type,
+        item.name,
+        item.fadeOut ? 'true' : 'false',
+        item.fadeIn ? 'true' : 'false',
+        item.autoplay ? 'true' : 'false',
+        item.autoDuration || '',
+        item.id || ''
+      ]);
       const csv = [headers, ...rows].map(r=>r.join(',')).join('\n');
       const blob=new Blob([csv],{type:'text/csv'});
       const url=URL.createObjectURL(blob);
@@ -363,21 +419,19 @@
     });
 
     function getLiveAssetIndex(asset) {
-      let idx = 0, liveNum = 1;
-      for (; idx < queue.length; idx++) {
+      if (!asset) return '';
+      let liveNum = 1;
+      for (let idx = 0; idx < queue.length; idx++) {
         const item = queue[idx];
-        if (
-          (item.type === 'slide' || item.type === 'video' || (item.type === 'transition' && item.name === 'fade_to_black')) &&
-          asset && item.name === asset.name && item.type === asset.type
-        ) {
-          return liveNum;
-        }
         if (item.type === 'slide' || item.type === 'video' || (item.type === 'transition' && item.name === 'fade_to_black')) {
+          if (asset.id && item.id === asset.id) return liveNum;
+          if (!asset.id && item.name === asset.name && item.type === asset.type) return liveNum;
           liveNum++;
         }
       }
-      return null;
+      return '';
     }
+
 
     function getPreviewAsset(liveIdx, currentIdx) {
       if (!queue.length) return null;
@@ -393,12 +447,32 @@
         }
         return null;
       }
-
       // Special case: highlighted is fade_to_black
-      if (queue[currentIdx] && queue[currentIdx].type === 'transition' && queue[currentIdx].name === 'fade_to_black') {
+      if (
+        queue[currentIdx] &&
+        queue[currentIdx].type === 'transition' &&
+        queue[currentIdx].name === 'fade_to_black'
+      ) {
+        // If the next item is fade_from_black, preview what comes after that
+        let idx1 = (currentIdx + 1) % queue.length;
+        if (
+          queue[idx1] &&
+          queue[idx1].type === 'transition' &&
+          queue[idx1].name === 'fade_from_black'
+        ) {
+          // Find the first non-transition asset after fade_from_black
+          let idx2 = (idx1 + 1) % queue.length;
+          for (let t2 = 0; t2 < queue.length; t2++) {
+            if (queue[idx2].type === 'slide' || queue[idx2].type === 'video') {
+              return queue[idx2];
+            }
+            idx2 = (idx2 + 1) % queue.length;
+          }
+          return null;
+        }
+        // Otherwise, preview black as usual
         return { type: 'black' };
       }
-
       // Special case: highlighted is crossfade
       if (queue[currentIdx] && queue[currentIdx].type === 'transition' && queue[currentIdx].name === 'crossfade') {
         let idx2 = (currentIdx + 1) % queue.length;
@@ -410,9 +484,8 @@
         }
         return null;
       }
-
       // If audience is black, preview first asset after next fade_from_black
-      if (liveAsset && liveAsset.type === 'black') {
+      if (liveAsset && liveAsset.type === 'transition' && liveAsset.name === 'fade_to_black') {
         let idx = currentIdx;
         for (let tries = 0; tries < queue.length; tries++) {
           if (queue[idx] && queue[idx].type === 'transition' && queue[idx].name === 'fade_from_black') {
@@ -430,7 +503,6 @@
         // If no fade_from_black found, fallback to next slide/video
         return getFirstNonTransitionAfter(currentIdx);
       }
-
       // If highlighted matches live asset
       if (liveIdx !== -1 && currentIdx === liveIdx) {
         let idx = (currentIdx + 1) % queue.length;
@@ -454,32 +526,44 @@
         // Default: fallback to next slide/video
         return getFirstNonTransitionAfter(currentIdx);
       }
-
       // If highlighted is a slide or video, preview it
       if (queue[currentIdx] && (queue[currentIdx].type === 'slide' || queue[currentIdx].type === 'video')) {
         return queue[currentIdx];
       }
-
       // Fallback
       return getStablePreviewForIndex(currentIdx);
     }
 
 
-
+    function uuidv4() {
+      return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+        (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+      );
+    }
 
     function renderQueue() {
-    queueEl.innerHTML = '';
-    let liveNum = 1; // 1-based numbering
+      queueEl.innerHTML = '';
+      let liveNum = 1; // 1-based numbering
 
-    queue.forEach((item, i) => {
-      const div = document.createElement('div');
-      div.className = 'queue-tile' + (i === currentIdx ? ' current' : '');
-      div.addEventListener('click', () => {
-        currentIdx = i;
-        renderQueue();
+      // Print all IDs for debug at the top of the function
+      console.log('--- Queue IDs ---');
+      queue.forEach((item, i) => {
+        // Warn and fix any missing id
+        if (!item.id) {
+          console.warn("Queue item missing ID, auto-assigning:", item);
+          item.id = uuidv4();
+        }
+        console.log(`[${i}] Type: ${item.type}, Name: ${item.name}, ID: ${item.id}`);
       });
+      console.log('--- End Queue IDs ---');
 
-        
+      queue.forEach((item, i) => {
+        const div = document.createElement('div');
+        div.className = 'queue-tile' + (i === currentIdx ? ' current' : '');
+        div.addEventListener('click', () => {
+          currentIdx = i;
+          renderQueue();
+        });
 
         // Render the asset or transition tile
         if (item.type === 'slide') {
@@ -527,16 +611,15 @@
         }
 
         const autoBtn = document.createElement('button');
-          autoBtn.className = 'autoplay-toggle' + (item.autoplay ? ' on' : '');
-          autoBtn.title = 'Toggle autoplay next for this video';
-          autoBtn.textContent = 'Auto';
-          autoBtn.onclick = function(ev) {
-            ev.stopPropagation();
-            item.autoplay = !item.autoplay;
-            renderQueue();
-          };
-          div.appendChild(autoBtn);
-        
+        autoBtn.className = 'autoplay-toggle' + (item.autoplay ? ' on' : '');
+        autoBtn.title = 'Toggle autoplay next for this video';
+        autoBtn.textContent = 'Auto';
+        autoBtn.onclick = function(ev) {
+          ev.stopPropagation();
+          item.autoplay = !item.autoplay;
+          renderQueue();
+        };
+        div.appendChild(autoBtn);
 
         const removeBtn = document.createElement('button');
         removeBtn.className = 'remove-btn';
@@ -544,24 +627,25 @@
         removeBtn.title = 'Remove from queue';
         removeBtn.onclick = function(ev) {
           ev.stopPropagation(); // Prevent queue selection
-          // Remove the item
           queue.splice(i, 1);
-          // Adjust currentIdx if needed
           if (currentIdx >= queue.length) currentIdx = queue.length - 1;
           renderQueue();
         };
         div.appendChild(removeBtn);
 
+        div.ondblclick = function(ev) {
+          ev.stopPropagation();
+          openItemSettingsModal(item, i);
+        };
+
+
         queueEl.appendChild(div);
       });
 
-      // ------ Preview logic (this is the important part) ------
-      // Determine which index to preview
-
+      // ------ Preview logic ------
       console.log(`[renderQueue] currentIdx: ${currentIdx}, liveIdx: ${liveIdx}`);
 
-      // Determine which index to preview
-      // Improved preview logic: use new getPreviewAsset
+      // Improved preview logic: use getPreviewAsset
       const toPreview = getPreviewAsset(liveIdx, currentIdx);
 
       if (toPreview) {
@@ -597,7 +681,12 @@
       let liveIdxNum = liveAsset ? getLiveAssetIndex(liveAsset) : '';
       document.getElementById('audience-live-index').textContent = liveIdxNum ? liveIdxNum : '';
 
+      console.log('[QUEUE STATE]', queue.map((item, i) => ({
+        i, type: item.type, name: item.name, autoplay: item.autoplay, autoDuration: item.autoDuration
+      })));
+      
     }
+
 
     function getFirstNonTransitionAfter(idx) {
       if (!queue.length) return null;
@@ -639,25 +728,33 @@
       }
       return null;
     }
-
+    
     function setLiveAsset(asset) {
       liveAsset = asset;
       if (!asset) {
         liveIdx = -1;
-        console.log('[Live Asset] Set to: null');
         return;
       }
       if (asset.type === 'black') {
         liveIdx = -1;
-        console.log('[Live Asset] Set to: BLACK');
         return;
       }
-      // Find index in queue matching asset
+      if (asset.id) {
+        // Prefer id-based lookup for robust matching
+        liveIdx = queue.findIndex(item => item && item.id === asset.id);
+        if (liveIdx !== -1) {
+          currentIdx = liveIdx;
+          console.log(`[Live Asset] Set to: idx=${liveIdx}, type=${asset.type}, name=${asset.name}, id=${asset.id}`);
+          return;
+        }
+      }
+      // Fallback: old logic for backward compatibility
       liveIdx = queue.findIndex(item => item && item.name === asset.name && item.type === asset.type);
       if (liveIdx !== -1) {
+        currentIdx = liveIdx;
         console.log(`[Live Asset] Set to: idx=${liveIdx}, type=${asset.type}, name=${asset.name}`);
       } else {
-        console.log(`[Live Asset] Set to: NOT FOUND in queue. type=${asset.type}, name=${asset.name}`);
+        // Special-case for fade_to_black if you want
       }
     }
 
@@ -689,106 +786,195 @@
 
     // Send asset
     let autoplayEnabled=false;
-    function sendCurrent(){ if(currentIdx<0||currentIdx>=queue.length)return alert('Select asset first'); sendAsset(queue[currentIdx],currentIdx); }
-    
-    function sendAsset(asset, idx) {
+
+    function sendCurrent() {
+      if (currentIdx < 0 || currentIdx >= queue.length) return alert('Select asset first');
+      console.log(`%c[MANUAL] Sending current asset via UI`, 'color: orange; font-weight:bold;');
+      sendAsset(queue[currentIdx], currentIdx, 'manual');
+    }
+
+    // Make sure this is available globally!
+    let slideAutoTimer = null;
+
+    function setupSlideAutoplay(asset, idx) {
+      if (slideAutoTimer) clearTimeout(slideAutoTimer);
+      slideAutoTimer = null;
+      let duration = (asset.autoDuration > 0 ? asset.autoDuration : /* fallback */ 8);
+      if (asset && asset.type === 'slide' && asset.autoplay && duration > 0) {
+        slideAutoTimer = setTimeout(() => {
+          if (currentIdx === idx) {
+            let nextIdx = (currentIdx + 1) % queue.length;
+            let nextItem = queue[nextIdx];
+            nextInQueue();
+
+            // Autoplay should trigger the correct transition type if present!
+            if (queue[currentIdx].type === 'transition') {
+              sendAsset(queue[currentIdx], currentIdx, 'autoplay');
+            } else {
+              sendAsset(queue[currentIdx], currentIdx, 'autoplay');
+            }
+          }
+        }, duration * 1000);
+        console.log(
+          `%c[SETUP TIMER] Will auto-advance "${asset.name}" in ${duration}s (autoplay:${asset.autoplay})`,
+          'color: #aabb00;'
+        );
+      }
+    }
+
+
+    // The main sendAsset function:
+    function sendAsset(asset, idx, trigger = 'manual') {
       const fadeOut = document.getElementById('fadeout-checkbox').checked;
       const fadeIn = document.getElementById('fadein-checkbox').checked;
-      // No longer need a global autoplay checkbox for videos, but can keep if you want manual override
-      // const autoplay = document.getElementById('autoplay-checkbox').checked;
+
+      console.log(
+        `%c[${trigger.toUpperCase()}] sendAsset →`,
+        'color: #00c3ff; font-weight: bold;',
+        {
+          type: asset.type,
+          name: asset.name,
+          idx,
+          fadeOut: fadeOut,
+          fadeIn: fadeIn,
+          autoplay: asset.autoplay,
+          autoDuration: asset.autoDuration,
+          crossfade_duration: asset.crossfade_duration,
+          fade_to_black_duration: asset.fade_to_black_duration
+        }
+      );
 
       // --- FADE TO BLACK ---
       if (asset.type === 'transition' && asset.name === 'fade_to_black') {
-        const dur = parseFloat(document.getElementById('fade-black-duration')?.value) || 0.8;
-        socket.emit('fade_to_black', { duration: dur });
+        const fadeDuration =
+          (typeof asset.fade_to_black_duration === 'number' && asset.fade_to_black_duration > 0)
+            ? asset.fade_to_black_duration
+            : parseFloat(document.getElementById('fade-black-duration')?.value) || 0.8;
+
+        const dwellDuration = 
+          (typeof asset.black_dwell_duration === 'number' && asset.black_dwell_duration > 0)
+            ? asset.black_dwell_duration
+            : 2.0; // Fallback dwell time
+
+        const auto = !!asset.autoplay;
+
+        console.log('[TRANSITION SEND] fade_to_black with duration:', fadeDuration, 'dwell:', dwellDuration, 'auto:', auto, asset);
+
+        socket.emit('fade_to_black', { duration: fadeDuration, id: asset.id });
+        socket.emit('fade_to_black_control', { duration: fadeDuration, id: asset.id });
+
+        setTimeout(() => {
+          showBlackScreen();
+
+          if (auto) {
+            // After dwell time, auto-progress to next asset in queue
+            setTimeout(() => {
+              let nextIdx = (currentIdx + 1) % queue.length;
+              let nextItem = queue[nextIdx];
+              currentIdx = nextIdx;
+              renderQueue();
+              sendAsset(queue[currentIdx], currentIdx, 'autoplay-black');
+            }, dwellDuration * 1000);
+          }
+        }, fadeDuration * 1000 + 20);
+
+        if (slideAutoTimer) clearTimeout(slideAutoTimer);
         return;
       }
 
-      // --- FADE FROM BLACK ---
       if (asset.type === 'transition' && asset.name === 'fade_from_black') {
-        // Find next non-transition asset in queue for fade-up!
-        let nextIdx = (idx + 1) % queue.length;
-        let nextAsset = null;
-        for (let tries = 0; tries < queue.length; tries++) {
-          if (queue[nextIdx].type !== 'transition') {
-            nextAsset = queue[nextIdx];
-            break;
+          // Find next real asset
+          let nextIdx = (idx + 1) % queue.length;
+          let nextAsset = null;
+          for (let tries = 0; tries < queue.length; tries++) {
+              if (queue[nextIdx].type !== 'transition') {
+                  nextAsset = queue[nextIdx];
+                  break;
+              }
+              nextIdx = (nextIdx + 1) % queue.length;
           }
-          nextIdx = (nextIdx + 1) % queue.length;
-        }
-        const dur = parseFloat(document.getElementById('fade-black-duration')?.value) || 0.8;
-        if (nextAsset) {
-          // 1. Switch the asset under black
-          socket.emit('display_asset', { ...nextAsset });
+          // Use per-item fade_from_black_duration or fallback
+          const dur = (typeof asset.fade_from_black_duration === 'number' && asset.fade_from_black_duration > 0)
+            ? asset.fade_from_black_duration
+            : parseFloat(document.getElementById('fade-black-duration')?.value) || 0.8;
 
-          // 2. Move highlight to the new asset and re-render
-          currentIdx = nextIdx;
-          renderQueue();
-
-          // 3. After a very short delay, fade up from black
-          setTimeout(() => {
-            socket.emit('fade_from_black', { duration: dur });
-          }, 20);
-        }
-        return;
+          if (nextAsset) {
+            currentIdx = nextIdx;
+            renderQueue();
+            // Instead of fade_from_black, emit a crossfade_to with fromBlack: true
+            socket.emit('crossfade_to', { ...nextAsset, crossfade_duration: dur, fromBlack: true });
+            socket.emit('crossfade_to_control', { ...nextAsset, crossfade_duration: dur, fromBlack: true });
+            updatePreviewArea(nextAsset);
+            if (nextAsset.type === 'slide') setupSlideAutoplay(nextAsset, nextIdx);
+          }
+          if (slideAutoTimer) clearTimeout(slideAutoTimer);
+          return;
       }
 
       // --- CROSSFADE ---
       if (asset.type === 'transition' && asset.name === 'crossfade') {
         const nextIdx = (idx + 1) % queue.length;
         const nextAsset = queue[nextIdx];
-
         if (nextAsset && (nextAsset.type === 'slide' || nextAsset.type === 'video')) {
           currentIdx = nextIdx;
           renderQueue();
-
-          const dur = parseFloat(document.getElementById('crossfade-duration').value) || 2.0;
-
-          socket.emit('crossfade_to', {
-            ...nextAsset,
-            crossfade_duration: dur
-          });
+          // Use per-item duration if set, else global
+          const dur = (typeof asset.crossfade_duration === 'number' && asset.crossfade_duration > 0)
+            ? asset.crossfade_duration
+            : parseFloat(document.getElementById('crossfade-duration').value) || 2.0;
+          socket.emit('crossfade_to', { ...nextAsset, crossfade_duration: dur, id: nextAsset.id });
+          socket.emit('crossfade_to_control', { ...nextAsset, crossfade_duration: dur, id: nextAsset.id });
           updatePreviewArea(nextAsset);
+          // Handle slide auto after crossfade lands on a slide
+          if (nextAsset.type === 'slide') setupSlideAutoplay(nextAsset, nextIdx);
         }
+        if (slideAutoTimer) clearTimeout(slideAutoTimer); // Cancel any running timers
         return;
       }
 
       // --- DISPLAY SLIDE OR VIDEO (default case) ---
+      if (slideAutoTimer) clearTimeout(slideAutoTimer); // Always clear before setting up a new one
+
       if (fadeOut) {
         const dur = parseFloat(document.getElementById('fade-black-duration')?.value) || 0.8;
         socket.emit('fade_to_black', { duration: dur });
         setTimeout(() => {
-          socket.emit('display_asset', { ...asset, fadeIn, autoplay: !!asset.autoplay });
+          socket.emit('display_asset', { ...asset, fadeIn, autoplay: !!asset.autoplay, id: asset.id });
           updatePreviewArea(asset);
-          // Only setupAutoplayListener for video assets
           if (asset.type === 'video') setupAutoplayListener();
+          if (asset.type === 'slide') setupSlideAutoplay(asset, idx);
         }, dur * 1000 + 20);
       } else {
-        socket.emit('display_asset', { ...asset, fadeIn, autoplay: !!asset.autoplay });
+        socket.emit('display_asset', { ...asset, fadeIn, autoplay: !!asset.autoplay, id: asset.id });
         updatePreviewArea(asset);
         if (asset.type === 'video') setupAutoplayListener();
+        if (asset.type === 'slide') setupSlideAutoplay(asset, idx);
       }
     }
+
 
     function setupAutoplayListener() {
       const video = document.getElementById('current-audience-video');
       video.onended = function() {
-        // Check if the current video has autoplay enabled
         if (queue[currentIdx] && queue[currentIdx].type === 'video' && queue[currentIdx].autoplay) {
-          // Advance to next in queue (could be transition, fade, etc.)
           let ni = (currentIdx + 1) % queue.length;
           let next = queue[ni];
-          if (next) {
-            currentIdx = ni;
-            renderQueue();
-            sendAsset(next, currentIdx);
-          }
+          console.log(
+            `%c[AUTOPLAY PROGRESS] Video "${queue[currentIdx].name}" (idx ${currentIdx}) finished → Next:`,
+            'color: #a259ff; font-weight:bold;',
+            next
+          );
+          currentIdx = ni;
+          renderQueue();
+          sendAsset(next, currentIdx, 'videoend');
         } else {
-          // No autoplay: do nothing, just pause at end.
           video.onended = null;
+          console.log('%c[VIDEO END] Video finished, no autoplay', 'color:#ccc;');
         }
       };
+      
     }
+
 
     // Preview
     function previewQueueItem(item){ if(item.type==='slide'){ previewImg.style.display='block'; previewImg.src=`/static/slides/${item.name}`; previewVid.style.display='none'; } else if(item.type==='video'){ previewVid.style.display='block'; previewSrc.src=`/static/media/${item.name}`; previewVid.load(); previewImg.style.display='none'; } else { previewImg.style.display='none'; previewVid.style.display='none'; }}
@@ -800,14 +986,46 @@
       document.getElementById('viewer-count').textContent = data.count;
     });
     
+    function showBlackScreen() {
+      const blackAsset = {
+          type: 'slide',
+          name: 'black.png',    // Make sure this matches your black image filename
+          id: 'black-placeholder'
+          // You can add fields if your audience expects more
+      };
+      socket.emit('display_asset', blackAsset);
+      // Optionally: update preview area if you want the local preview to match
+      updatePreviewArea(blackAsset);
+      console.log('[CONTROL] Sent black.png to audience for black screen effect.');
+  }
+
     
     
-    socket.on('fade_to_black', function(data) {
-      const c = document.getElementById('current-audience-container');
-      c.style.background = 'black';
-      document.getElementById('current-audience-img').style.display = 'none';
-      document.getElementById('current-audience-video').style.display = 'none';
+    socket.on('fade_to_black_control', function(data) {
+      // Use the id from data to match the correct fade_to_black instance!
+      if (data && data.id) {
+        let idx = queue.findIndex(item => item && item.id === data.id);
+        if (idx !== -1) {
+          liveAsset = queue[idx];
+          liveIdx = idx;
+          currentIdx = idx; // Optional: if you want the highlight to always follow
+          console.log(`[fade_to_black_control] Set liveAsset to idx ${idx} with id ${data.id}`);
+        } else {
+          console.warn("fade_to_black_control: No queue item found for id", data.id);
+        }
+      } else {
+        // Backward compatibility: fallback to old logic (first fade_to_black)
+        let idx = queue.findIndex(item => item.type === 'transition' && item.name === 'fade_to_black');
+        if (idx !== -1) {
+          liveAsset = queue[idx];
+          liveIdx = idx;
+          currentIdx = idx;
+        }
+      }
+      renderQueue();
     });
+
+
     socket.on('fade_from_black', function(data) {
       document.getElementById('current-audience-container').style.background = '';
     });
@@ -891,18 +1109,39 @@
       //Emit sync state
     socket.emit('sync_state', { type: 'slide', name: 'holdingslide.jpg', autoplay: false, fadeIn: false });
 
-  </script>
-
-  <script>
     socket.on('display_asset', asset => {
       setLiveAsset(asset);
       
       renderQueue();
     });
-    socket.on('crossfade_to', asset => {
-      setLiveAsset(asset);
-      
-      renderQueue();
+    console.log("[control.html] Setting up crossfade_to_control event listener");
+    socket.on('crossfade_to_control', asset => {
+      console.log("[crossfade_to_control] Received crossfade_to_control event for asset:", asset);
+
+      // Find the index of the asset in the queue
+      const assetIndex = queue.findIndex(item =>
+        item &&
+        String(item.name).trim().toLowerCase() === String(asset.name).trim().toLowerCase() &&
+        String(item.type).trim().toLowerCase() === String(asset.type).trim().toLowerCase()
+      );
+
+      if (assetIndex !== -1) {
+        // Update liveIdx and liveAsset directly
+        liveIdx = assetIndex;
+        liveAsset = asset;
+
+        // ADD THIS LINE: Update currentIdx after the transition
+        currentIdx = assetIndex;
+
+        console.log("[crossfade_to_control] Asset found in queue at index:", assetIndex);
+        console.log("[crossfade_to_control] Setting liveIdx to:", liveIdx);
+        console.log("[crossfade_to_control] Setting liveAsset to:", liveAsset);
+
+        // Force UI update after liveIdx/liveAsset update
+        renderQueue();
+      } else {
+        console.log("[crossfade_to_control] Asset NOT found in queue!");
+      }
     });
     socket.on('fade_to_black', () => {
       setLiveAsset({ type: 'black' }); // Treat black as a "live" state
@@ -912,7 +1151,180 @@
     socket.on('fade_from_black', () => {
       // Nothing special: next real asset will update this
     });
+
+    let editingItemIdx = null;
+
+    function openItemSettingsModal(item, index) {
+      // Remove any existing modals first
+      let old = document.getElementById('item-settings-modal');
+      if (old) old.remove();
+
+      // Create modal and style
+      const modal = document.createElement('div');
+      modal.id = 'item-settings-modal';
+      modal.style = `
+        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+        background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 10000;
+      `;
+
+      // Build content
+      const wrapper = document.createElement('div');
+      wrapper.style = `
+        background: #222; color: #fff; padding: 2em; border-radius: 12px; min-width: 320px; max-width: 90vw;
+        box-shadow: 0 6px 32px rgba(0,0,0,0.4);
+        display: flex; flex-direction: column; gap: 1.1em;
+      `;
+
+      let html = `<h3 style="margin-top:0;">Settings for ${item.type === 'slide' || item.type === 'video' ? item.name : item.name.replaceAll('_', ' ')}</h3>`;
+
+      // Auto settings for all items
+      html += `
+        <label>
+          <input type="checkbox" id="modal-autoplay" ${item.autoplay ? 'checked' : ''}>
+          Auto-transition / Autoplay
+        </label>
+      `;
+
+      // Only show duration for stills and for transitions (set per-asset transition times)
+      if (item.type === 'slide') {
+        html += `
+          <label>
+            Slide auto-duration (seconds):
+            <input type="number" id="modal-autoDuration" value="${typeof item.autoDuration === 'number' ? item.autoDuration : 8}" min="1" max="300" step="0.5">
+          </label>
+        `;
+      }
+      if (item.type === 'video') {
+        html += `<small>Autoplay moves to next asset when video finishes.</small>`;
+      }
+
+      if (item.type === 'transition' && item.name === 'crossfade') {
+        html += `
+          <label>
+            Crossfade duration (seconds):
+            <input type="number" id="modal-crossfadeDuration" value="${typeof item.crossfade_duration === 'number' ? item.crossfade_duration : ''}" min="0.2" max="20" step="0.1">
+          </label>
+          <small>Leave blank to use the default crossfade duration.</small>
+        `;
+      }
+      if (item.type === 'transition' && item.name === 'fade_to_black') {
+        html += `
+          <label>
+            Fade-to-black duration (seconds):
+            <input type="number" id="modal-fadeToBlackDuration" value="${typeof item.fade_to_black_duration === 'number' ? item.fade_to_black_duration : ''}" min="0.2" max="20" step="0.1">
+          </label>
+          <label>
+            Time to stay on black (seconds):
+            <input type="number" id="modal-blackDwellDuration" value="${typeof item.black_dwell_duration === 'number' ? item.black_dwell_duration : ''}" min="0" max="60" step="0.1">
+          </label>
+          <label>
+            <input type="checkbox" id="modal-blackAutoplay" ${item.autoplay ? 'checked' : ''}>
+            Auto-progress to next asset after black
+          </label>
+          <small>Leave blank to use the default durations. If autoplay is on, system will auto-progress after the hold.</small>
+        `;
+      }
+      if (item.type === 'transition' && item.name === 'fade_from_black') {
+        html += `
+          <label>
+            Fade-from-black duration (seconds):
+            <input type="number" id="modal-fadeFromBlackDuration" value="${typeof item.fade_from_black_duration === 'number' ? item.fade_from_black_duration : ''}" min="0.2" max="20" step="0.1">
+          </label>
+          <small>Leave blank to use the default fade-from-black duration.</small>
+        `;
+      }
+      // Buttons
+      html += `
+        <div style="margin-top:1.3em; display:flex; gap:1em; justify-content: flex-end;">
+          <button id="modal-cancel" style="padding:0.5em 1.2em;">Cancel</button>
+          <button id="modal-save" style="padding:0.5em 1.2em;background:#ffd600;color:#222;font-weight:bold;border-radius:8px;">Save</button>
+        </div>
+      `;
+
+      wrapper.innerHTML = html;
+      modal.appendChild(wrapper);
+      document.body.appendChild(modal);
+
+      // Event listeners
+      document.getElementById('modal-cancel').onclick = function() {
+        modal.remove();
+      };
+      document.getElementById('modal-save').onclick = function(e) {
+        e.preventDefault();
+
+        // Read values
+        const autoplay = document.getElementById('modal-autoplay').checked;
+
+        // Shallow clone & update only the item
+        let updated = { ...queue[index], autoplay };
+
+        if (item.type === 'slide') {
+          let autoDuration = parseFloat(document.getElementById('modal-autoDuration').value);
+          if (!isNaN(autoDuration) && autoDuration > 0) updated.autoDuration = autoDuration;
+        }
+        if (item.type === 'transition' && item.name === 'crossfade') {
+          let v = parseFloat(document.getElementById('modal-crossfadeDuration').value);
+          updated.crossfade_duration = !isNaN(v) && v > 0 ? v : undefined;
+        }
+        if (item.type === 'transition' && item.name === 'fade_to_black') {
+          let v = parseFloat(document.getElementById('modal-fadeToBlackDuration').value);
+          updated.fade_to_black_duration = !isNaN(v) && v > 0 ? v : undefined;
+
+          let dwell = parseFloat(document.getElementById('modal-blackDwellDuration').value);
+          updated.black_dwell_duration = !isNaN(dwell) && dwell >= 0 ? dwell : undefined;
+
+          updated.autoplay = document.getElementById('modal-blackAutoplay').checked;
+        }
+        if (item.type === 'transition' && item.name === 'fade_from_black') {
+          let v = parseFloat(document.getElementById('modal-fadeFromBlackDuration').value);
+          updated.fade_from_black_duration = (!isNaN(v) && v > 0) ? v : undefined;
+        }
+
+        // Replace the item in queue
+        queue[index] = updated;
+        modal.remove();
+        renderQueue();
+      };
+
+      // Optional: close modal on outside click
+      modal.onclick = function(ev) {
+        if (ev.target === modal) modal.remove();
+      };
+    }
+    
+
+
+
   </script>
-  
+
+  <!-- Settings Modal -->
+<div id="item-settings-modal" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.45);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:white;padding:2em;min-width:300px;max-width:90vw;border-radius:10px;box-shadow:0 8px 32px #0006;">
+    <h3 id="settings-title">Asset Settings</h3>
+    <form id="item-settings-form">
+      <div id="slide-settings" style="display:none;">
+        <label>
+          Auto Advance after <input type="number" id="auto-duration-input" min="1" max="3600" step="0.1" style="width:4em;"> sec
+        </label>
+      </div>
+      <div id="video-settings" style="display:none;">
+        <label>
+          <input type="checkbox" id="autoplay-video-input"> Autoplay on Send
+        </label>
+      </div>
+      <div id="transition-settings" style="display:none;">
+        <label>
+          Duration: <input type="number" id="transition-duration-input" min="0.1" max="30" step="0.1" style="width:4em;"> sec
+        </label>
+      </div>
+      <div style="margin-top:1em;text-align:right;">
+        <button type="button" id="settings-cancel-btn">Cancel</button>
+        <button type="submit" id="settings-save-btn">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+
 </body>
 </html>
