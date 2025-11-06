@@ -12,6 +12,7 @@ from functools import wraps
 load_dotenv()
 
 app = Flask(__name__)
+
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24))
 
 # Redis for socket‐messaging
@@ -26,7 +27,7 @@ socketio = SocketIO(
 # Add global counter
 active_viewers = 0
 
-active_viewers = 0
+
 
 @socketio.on('connect')
 def on_connect():
@@ -263,5 +264,11 @@ def on_seek_video(data):
     emit('seek_video', {'time': time_sec}, broadcast=True)
 
 if __name__ == '__main__':
+    import os, sys
     port = int(os.environ.get('PORT', 5000))
-    socketio.run(app, host='0.0.0.0', port=port)
+    print("Starting Audience Live App…", flush=True)
+    print(f"Python {sys.version.split()[0]}  •  Port {port}", flush=True)
+    # If your HTML files are NOT in a 'templates' folder, ensure this is set near the top:
+    # app = Flask(__name__, template_folder='.')
+    socketio.run(app, host='0.0.0.0', port=port, debug=True)
+
