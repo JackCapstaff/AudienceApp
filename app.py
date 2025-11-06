@@ -8,74 +8,81 @@ from flask_socketio import SocketIO, emit, disconnect
 from dotenv import load_dotenv
 from functools import wraps
 
-# Load .env into os.environ
+# Load .env into os.environ (okay locally; Azure uses App Settings)
 load_dotenv()
 
 app = Flask(__name__)
-
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24))
 
-# Redis for socket‐messaging
+# Redis for socket‐messaging (optional in Azure)
 redis_url = os.environ.get('REDIS_URL') or os.environ.get('REDIS_TLS_URL')
-socketio = SocketIO(
-    app,
-    message_queue=redis_url,
-    cors_allowed_origins="*"
-)
+socketio = SocketIO(app, message_queue=redis_url, cors_allowed_origins="*")
 
+# ---- Auth config (SAFE READ) ----
+VALID_USER = os.environ.get('CONTROL_USER')
+VALID_PASS = os.environ.get('CONTROL_PASS')
+if not VALID_USER or not VALID_PASS:
+    # Don’t crash at import on Azure; log + default to disabled auth
+    # Prefer: set CONTROL_USER/CONTROL_PASS in Azure → Configuration.
+    print("[WARN] CONTROL_USER / CONTROL_PASS not set – /control will require login but no creds configured.", flush=True)
 
-# Add global counter
+# ---- Viewer count (note: per-process only) ----
 active_viewers = 0
 
+def now(): return time.time()
 
+current_asset = {
+    'type': 'slide',
+    'name': 'holdingslide.jpg',
+    'autoplay': False,
+    'fadeIn': False,
+    'video_time': 0.0,
+    'video_paused': True,
+    'video_speed': 1.0,
+    'video_started_at': None
+}
 
-@socketio.on('connect')
-def on_connect():
-    global active_viewers
-    active_viewers += 1
-    print(f"Socket connected: active viewers now {active_viewers}")
-    emit('viewer_count_update', {'count': active_viewers}, broadcast=True)
+def update_video_started_at():
+    if current_asset['type'] == 'video':
+        if not current_asset['video_paused']:
+            current_asset['video_started_at'] = now() - current_asset['video_time']
+        else:
+            current_asset['video_time'] = get_video_current_time()
+            current_asset['video_started_at'] = None
 
-@socketio.on('disconnect')
-def on_disconnect():
-    global active_viewers
-    active_viewers = max(0, active_viewers - 1)
-    print(f"Socket disconnected: active viewers now {active_viewers}")
-    emit('viewer_count_update', {'count': active_viewers}, broadcast=True)
+def get_video_current_time():
+    if current_asset['type'] == 'video':
+        if not current_asset['video_paused'] and current_asset['video_started_at'] is not None:
+            return now() - current_asset['video_started_at']
+        return float(current_asset.get('video_time', 0.0))
+    return 0.0
 
-# -----------------------------------------------------------------------------
-# Credentials
-# -----------------------------------------------------------------------------
-VALID_USER = os.environ['CONTROL_USER']
-VALID_PASS = os.environ['CONTROL_PASS']
-
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # Decorator
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # Detect localhost and auto-authenticate
+        # Auto-auth for localhost
         host = request.host.split(':')[0]
         if host in ('localhost', '127.0.0.1', '::1'):
             session['authenticated'] = True
             return f(*args, **kwargs)
 
-        # Otherwise enforce login
         if not session.get('authenticated'):
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated_function
 
-# -----------------------------------------------------------------------------
-# Authentication routes
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Auth routes
+# ---------------------------------------------------------------------
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password')
-        if username == VALID_USER and password == VALID_PASS:
+        username = request.form.get('username', '')
+        password = request.form.get('password', '')
+        if VALID_USER and VALID_PASS and username == VALID_USER and password == VALID_PASS:
             session['authenticated'] = True
             flash('Logged in successfully', 'success')
             return redirect(url_for('control'))
@@ -89,66 +96,30 @@ def logout():
     flash('You have been logged out', 'info')
     return redirect(url_for('login'))
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # Control interface
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 @app.route('/control')
 @login_required
 def control():
     slides_dir = os.path.join(app.root_path, 'static', 'slides')
-    slides = sorted(
-        f for f in os.listdir(slides_dir)
-        if f.lower().endswith(('.png', '.jpg', '.jpeg'))
-    )
-
     media_dir = os.path.join(app.root_path, 'static', 'media')
-    videos = sorted(
-        f for f in os.listdir(media_dir)
-        if f.lower().endswith(('.mp4', '.webm', '.ogg'))
-    )
+
+    slides = []
+    if os.path.isdir(slides_dir):
+        slides = sorted(f for f in os.listdir(slides_dir)
+                        if f.lower().endswith(('.png', '.jpg', '.jpeg')))
+
+    videos = []
+    if os.path.isdir(media_dir):
+        videos = sorted(f for f in os.listdir(media_dir)
+                        if f.lower().endswith(('.mp4', '.webm', '.ogg')))
 
     return render_template('control.html', slides=slides, videos=videos)
 
-# --- In-memory current state (reset on restart!) ---
-current_asset = {
-    'type': 'slide',
-    'name': 'holdingslide.jpg',
-    'autoplay': False,
-    'fadeIn': False,
-    'video_time': 0.0,
-    'video_paused': True,
-    'video_speed': 1.0,
-    'video_started_at': None  # UTC timestamp when video started playing (if playing)
-}
-
-def now():
-    return time.time()
-
-def update_video_started_at():
-    # Called whenever play/pause is toggled
-    if current_asset['type'] == 'video':
-        if not current_asset['video_paused']:
-            # Video started playing now: record wallclock time
-            current_asset['video_started_at'] = now() - current_asset['video_time']
-        else:
-            # Video paused: stop "timer"
-            current_asset['video_time'] = get_video_current_time()
-            current_asset['video_started_at'] = None
-
-def get_video_current_time():
-    # Return the video time corresponding to wallclock
-    if current_asset['type'] == 'video':
-        if not current_asset['video_paused'] and current_asset['video_started_at'] is not None:
-            # Compute how long since play started
-            elapsed = now() - current_asset['video_started_at']
-            return elapsed
-        else:
-            return current_asset.get('video_time', 0.0)
-    return 0.0
-
-@app.route('/control')
-
-
+# ---------------------------------------------------------------------
+# Audience
+# ---------------------------------------------------------------------
 @app.route('/')
 def audience():
     return render_template('audience.html')
@@ -158,15 +129,27 @@ def favicon():
     return send_from_directory(os.path.join(app.root_path, 'static'),
                                'favicon.ico', mimetype='image/vnd.microsoft.icon')
 
-# --- SocketIO handlers ---
-
+# ---------------------------------------------------------------------
+# Socket.IO
+# ---------------------------------------------------------------------
 @socketio.on('connect')
 def on_connect():
-    # Calculate current playback time for late joiners
+    # viewer count (best-effort; per-process)
+    global active_viewers
+    active_viewers += 1
+    emit('viewer_count_update', {'count': active_viewers}, broadcast=True)
+
+    # late join sync
     asset = current_asset.copy()
     if asset['type'] == 'video':
         asset['video_time'] = get_video_current_time()
     emit('sync_state', asset)
+
+@socketio.on('disconnect')
+def on_disconnect():
+    global active_viewers
+    active_viewers = max(0, active_viewers - 1)
+    emit('viewer_count_update', {'count': active_viewers}, broadcast=True)
 
 @socketio.on('display_asset')
 def on_display_asset(data):
@@ -175,30 +158,28 @@ def on_display_asset(data):
         if k in data:
             current_asset[k] = data[k]
     if current_asset['type'] == 'video':
-        # Always reset time and paused status on new video
         current_asset['video_time'] = 0.0
         current_asset['video_paused'] = not current_asset.get('autoplay', False)
         current_asset['video_speed'] = 1.0
-        if not current_asset['video_paused']:
-            current_asset['video_started_at'] = now()
-        else:
-            current_asset['video_started_at'] = None
+        current_asset['video_started_at'] = None if current_asset['video_paused'] else now()
     else:
-        current_asset['video_time'] = 0.0
-        current_asset['video_paused'] = True
-        current_asset['video_speed'] = 1.0
-        current_asset['video_started_at'] = None
+        current_asset.update({
+            'video_time': 0.0,
+            'video_paused': True,
+            'video_speed': 1.0,
+            'video_started_at': None
+        })
 
-    # For all: emit with up-to-date video_time
     asset = current_asset.copy()
     if asset['type'] == 'video':
         asset['video_time'] = get_video_current_time()
+
     emit('display_asset', {
         'type': data.get('type'),
         'name': data.get('name'),
         'autoplay': data.get('autoplay', False),
         'fadeIn': data.get('fadeIn', False),
-        'id': data.get('id')  # propagate unique id!
+        'id': data.get('id')
     }, broadcast=True)
 
 @socketio.on('transition')
@@ -207,17 +188,8 @@ def on_transition(data):
 
 @socketio.on('crossfade_to')
 def handle_crossfade_to(asset):
-    # optional debug log
-    print(f"[CONTROL → ALL] crossfade_to → {asset}")
-
-    # Send to all connected clients (including the control panel)
     socketio.emit('crossfade_to', asset)
-
-    # Send to the control panel (excluding the sender)
     socketio.emit('crossfade_to_control', asset)
-
-
-
 
 @socketio.on('fade_to_black')
 def on_fade_to_black(data=None):
@@ -230,7 +202,6 @@ def on_fade_from_black(data=None):
 
 @socketio.on('play_pause_video')
 def on_play_pause_video():
-    # Toggle paused
     current_asset['video_time'] = get_video_current_time()
     current_asset['video_paused'] = not current_asset.get('video_paused', True)
     update_video_started_at()
@@ -242,7 +213,6 @@ def on_play_pause_video():
 @socketio.on('set_playback_speed')
 def on_set_playback_speed(data):
     speed = float(data.get('speed', 1.0))
-    # adjust base time to preserve continuity
     if current_asset['type'] == 'video':
         if not current_asset['video_paused'] and current_asset['video_started_at'] is not None:
             base_time = get_video_current_time()
@@ -264,11 +234,8 @@ def on_seek_video(data):
     emit('seek_video', {'time': time_sec}, broadcast=True)
 
 if __name__ == '__main__':
-    import os, sys
+    import sys
     port = int(os.environ.get('PORT', 5000))
     print("Starting Audience Live App…", flush=True)
     print(f"Python {sys.version.split()[0]}  •  Port {port}", flush=True)
-    # If your HTML files are NOT in a 'templates' folder, ensure this is set near the top:
-    # app = Flask(__name__, template_folder='.')
     socketio.run(app, host='0.0.0.0', port=port, debug=True)
-
