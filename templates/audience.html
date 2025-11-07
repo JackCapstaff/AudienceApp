@@ -1,379 +1,197 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1"/>
-    <title>Audience View</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.min.js"
-            crossorigin="anonymous"></script>
-    <style>
-        html, body {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            overflow: hidden;
-            background: black;
-        }
+  <meta charset="UTF-8" />
+  <title>Audience View</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: black;
+      height: 100%;
+      width: 100%;
+    }
+    img, video {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      object-fit: contain;
+      opacity: 0; visibility: hidden;
+      transition: opacity 1s ease;
+    }
+    /* Main display layers */
+    #slide-img, #media-player { z-index: 3; }
+    /* Crossfade overlay layers (sit above main) */
+    #crossfade-img, #crossfade-video { z-index: 4; }
 
-        #asset-stack {
-            position: relative;
-            width: 100vw;
-            height: 100vh;
-        }
-
-        /* Main and overlay layers: ensure they stack  */
-        #slide-img, #media-player,
-        #crossfade-img, #crossfade-video {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            object-fit: contain;
-            opacity: 0; /* Modified default opacity to 0 */
-            visibility: hidden; /* Modified default visibility to hidden */
-            transition: opacity var(--crossfade-duration, 1s) ease; /* Added default transition */
-        }
-
-        /* Initially, main layer is hidden */
-        #slide-img, #media-player {
-            z-index: 2;
-        }
-
-        /* Crossfade overlay: initially hidden */
-        #crossfade-img, #crossfade-video {
-            z-index: 3;
-            background-color: black; /* Ensure a black background */
-        }
-
-        /* Black overlay and poll styles */
-        #black-overlay {
-            position: absolute;
-            top: 0; left: 0;
-            width: 100vw; height: 100vh;
-            z-index: 5;
-            background: black;
-            opacity: 0;
-            pointer-events: none; /* prevent blocking clicks */
-            transition: none; /* Only set in JS when needed */
-        }
-        #black-overlay.blackened {
-            opacity: 1;
-        }
-
-        #poll {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            display: none;
-            background: rgba(0, 0, 0, 0.8);
-            color: white;
-            font-family: sans-serif;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            padding: 1rem;
-            box-sizing: border-box;
-            z-index: 10;
-        }
-
-        #poll h1 {
-            margin: 0 0 1rem;
-            font-size: 2rem;
-            text-align: center;
-        }
-
-        #poll-options button {
-            margin: 0.5rem;
-            padding: 0.75rem 1.5rem;
-            font-size: 1.2rem;
-            cursor: pointer;
-        }
-
-        /* Class to trigger fade-in */
-        .fade-in {
-            opacity: 1 !important;
-            visibility: visible !important;
-        }
-
-    </style>
+    /* Black overlay for fade-to/from-black */
+    #black-overlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      background: black;
+      opacity: 0; visibility: hidden;
+      z-index: 5;
+      transition: opacity 1s ease;
+    }
+    .blackened { opacity: 1 !important; visibility: visible !important; }
+    .show { opacity: 1 !important; visibility: visible !important; }
+  </style>
 </head>
 <body>
-<div id="asset-stack">
-    <img id="slide-img" src="/static/slides/holdingslide.jpg" alt="Holding Slide"/>
-    <video id="media-player" playsinline webkit-playsinline muted preload="auto">
-        <source id="media-source" src="" type="video/mp4">
-        Your browser doesn’t support HTML5 video.
-    </video>
-    <!-- Crossfade layer -->
-    <img id="crossfade-img"/>
-    <video id="crossfade-video" playsinline webkit-playsinline muted autoplay preload="auto"></video>
-    <div id="black-overlay"></div>
-    <div id="poll">
-        <h1 id="poll-question"></h1>
-        <div id="poll-options"></div>
-    </div>
-</div>
-<script>
-    const socket = io({
-        transports: ['websocket'],
-        upgrade: false
-    });
+  <!-- Primary layers -->
+  <img id="slide-img" alt="">
+  <video id="media-player" playsinline muted></video>
+
+  <!-- Crossfade overlay layers -->
+  <img id="crossfade-img" alt="">
+  <video id="crossfade-video" playsinline muted></video>
+
+  <!-- Fade-to-black overlay -->
+  <div id="black-overlay"></div>
+
+  <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+  <script>
+    const socket = io({ transports: ['websocket'] });
+
     const slideImg = document.getElementById('slide-img');
     const mediaPlayer = document.getElementById('media-player');
-    const mediaSource = document.getElementById('media-source');
     const crossfadeImg = document.getElementById('crossfade-img');
     const crossfadeVideo = document.getElementById('crossfade-video');
     const blackOverlay = document.getElementById('black-overlay');
-    const pollOverlay = document.getElementById('poll');
-    const pollQuestion = document.getElementById('poll-question');
-    const pollOptions = document.getElementById('poll-options');
 
-    let lastAsset = {type: 'slide', name: 'holdingslide.jpg'};
-    let crossfadePending = null;
-    let transitioning = false; // Add this line
+    let lastAsset = { type: 'slide', name: 'holdingslide.jpg' };
 
-    socket.on('connect', () => console.log('Audience connected to socket.io'));
-    socket.on('disconnect', () => console.log('Audience disconnected from socket.io'));
-
-    // Debug all events
-    socket.onAny((event, ...args) => console.log('[socket event]', event, args));
-
-    socket.on('crossfade_to', asset => {
-        console.log('📡 Received crossfade_to:', asset);
-        crossfadePending = asset.name;
-        crossfadeTo(asset);
-    });
-
-
-    socket.on('sync_state', asset => {
-        if (asset.name === crossfadePending) {
-            crossfadePending = null;
-            return;
-        }
-        updateView(asset, false);
-    });
-    socket.on('display_asset', asset => {
-        if (asset.name === crossfadePending) {
-            crossfadePending = null;
-            return;
-        }
-        updateView(asset, false);
-    });
-
-    socket.on('play_pause_video', updateVideoState);
-    socket.on('set_playback_speed', asset => updateVideoState(Object.assign({}, lastAsset, {video_speed: asset.speed})));
-    socket.on('seek_video', ({time}) => updateVideoState(Object.assign({}, lastAsset, {video_time: time})));
-    // add/remove the “blackened” class so CSS can fade
-
-
-    function fadeBlackOverlay(show, duration) {
-        blackOverlay.style.transition = `opacity ${duration}s ease`;
-        // Force reflow
-        void blackOverlay.offsetWidth;
-        if (show) {
-            blackOverlay.classList.add('blackened');
-        } else {
-            blackOverlay.classList.remove('blackened');
-        }
-        // Clean up after the animation
+    // ---- Audio fade (Web Audio API) ----
+    let audioCtx;
+    function fadeAudio(videoEl, fromGain, toGain, duration = 1.0) {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const src = audioCtx.createMediaElementSource(videoEl);
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(fromGain, audioCtx.currentTime);
+        gain.gain.linearRampToValueAtTime(toGain, audioCtx.currentTime + duration);
+        src.connect(gain).connect(audioCtx.destination);
+        setTimeout(() => { try { src.disconnect(); gain.disconnect(); } catch(e){} }, duration * 1000 + 200);
+      } catch (e) {
+        console.warn('Audio fade unavailable:', e);
+      }
     }
 
-    socket.on('fade_to_black', (data) => {
-        const duration = data && typeof data.duration === 'number' ? data.duration : 0.8;
-        fadeBlackOverlay(true, duration);
-        console.log(`[AUDIENCE] Fading to black over ${duration}s`);
-    });
+    // ---- Black overlay helpers ----
+    function fadeBlackOverlay(show, duration = 1) {
+      blackOverlay.style.transition = `opacity ${duration}s ease`;
+      if (show) blackOverlay.classList.add('blackened');
+      else blackOverlay.classList.remove('blackened');
 
-    socket.on('fade_from_black', (data) => {
-        let duration = 0.8;
-        if (data && data.duration !== undefined) {
-            duration = parseFloat(data.duration);
-            if (isNaN(duration)) duration = 0.8;
-        }
-        fadeBlackOverlay(true, duration);
-        console.log(`[AUDIENCE] Fading from black over ${duration}s`);
-        setTimeout(() => {
-            console.log('Computed transition:', blackOverlay.style.transition);
-        }, 10);
-    });
+      blackOverlay.style.visibility = 'visible';
+      setTimeout(() => { if (!show) blackOverlay.style.visibility = 'hidden'; }, duration * 1000);
+    }
 
+    // ---- Non-crossfade render (initial or direct display) ----
+    function updateView(asset) {
+      lastAsset = asset;
+      slideImg.classList.remove('show');
+      mediaPlayer.classList.remove('show');
 
+      if (asset.type === 'slide') {
+        slideImg.src = `/static/slides/${asset.name}`;
+        slideImg.classList.add('show');
+      } else if (asset.type === 'video') {
+        mediaPlayer.src = `/static/media/${asset.name}`;
+        mediaPlayer.classList.add('show');
+        mediaPlayer.load();
+        if (asset.autoplay !== false) { mediaPlayer.play().catch(()=>{}); }
+      }
+    }
+
+    // ---- Crossfade render (supports video↔video overlap with audio fade) ----
     function crossfadeTo(asset) {
-        console.log('🔥 crossfadeTo start', asset);
+      const duration = Number(asset.crossfade_duration ?? 1.5);
 
-        // Get crossfade duration (fallback to 1s if not set)
-        const duration = asset.crossfade_duration || 1.0;
+      // Fade-from-black flow
+      if (asset.fromBlack) {
+        updateView(asset);
+        fadeBlackOverlay(false, duration);
+        lastAsset = asset;
+        return;
+      }
 
-        // Indicate in the console whether this is a fade from black or a normal crossfade
-        if (asset.fromBlack) {
-            console.log(
-                `🔳 [FADE FROM BLACK] crossfadeTo with asset "${asset.name}", duration: ${duration}s`
-            );
+      const prevType = lastAsset.type;
+      const newType = asset.type;
+      const main = (prevType === 'video') ? mediaPlayer : slideImg;
+      const overlay = (newType === 'video') ? crossfadeVideo : crossfadeImg;
+
+      // Prepare overlay with the incoming asset
+      if (newType === 'video') {
+        overlay.src = `/static/media/${asset.name}`;
+        overlay.load();
+        overlay.currentTime = 0;
+        overlay.play().catch(()=>{});
+        fadeAudio(overlay, 0.0, 1.0, duration);
+      } else {
+        overlay.src = `/static/slides/${asset.name}`;
+      }
+
+      // Make both layers visible for the crossfade
+      overlay.style.transition = `opacity ${duration}s ease`;
+      main.style.transition    = `opacity ${duration}s ease`;
+      overlay.style.opacity = 0;         overlay.style.visibility = 'visible';
+      main.style.opacity = 1;            main.style.visibility    = 'visible';
+
+      // If outgoing was video, fade its audio out
+      if (prevType === 'video') fadeAudio(mediaPlayer, 1.0, 0.0, duration);
+
+      // Start the visual crossfade
+      requestAnimationFrame(() => {
+        overlay.style.opacity = 1; // in
+        main.style.opacity = 0;    // out
+      });
+
+      // After fade completes → swap roles
+      setTimeout(() => {
+        // Hide/stop old main
+        if (prevType === 'video') {
+          mediaPlayer.pause();
+          mediaPlayer.removeAttribute('src');
+        }
+        main.style.visibility = 'hidden';
+        main.style.opacity = 0;
+
+        // Move overlay to main
+        if (newType === 'video') {
+          mediaPlayer.src = overlay.src;
+          mediaPlayer.load();
+          // Keep roughly the same timeline as overlay
+          try { mediaPlayer.currentTime = overlay.currentTime; } catch(e){}
+          mediaPlayer.play().catch(()=>{});
         } else {
-            console.log(
-                `🖼️ [NORMAL CROSSFADE] crossfadeTo with asset "${asset.name}", duration: ${duration}s`
-            );
+          slideImg.src = overlay.src;
         }
 
-        // Hide both main asset elements first, so nothing is shown before the new asset
-        slideImg.style.display = 'none';
-        mediaPlayer.style.display = 'none';
+        // Reset overlay
+        overlay.pause && overlay.pause();
+        overlay.style.opacity = 0;
+        overlay.style.visibility = 'hidden';
+        overlay.removeAttribute('src');
 
-        // Show the new asset *immediately* (but still hidden under overlay)
-        if (asset.type === 'slide') {
-            slideImg.src = `/static/slides/${asset.name}`;
-            slideImg.style.display = 'block';
-        } else if (asset.type === 'video') {
-            mediaPlayer.src = `/static/media/${asset.name}`;
-            mediaPlayer.style.display = 'block';
-            mediaPlayer.load();
-            mediaPlayer.play().catch(err => {});
-        }
+        // Reveal the new main
+        const newMain = (newType === 'video') ? mediaPlayer : slideImg;
+        newMain.style.opacity = 1;
+        newMain.style.visibility = 'visible';
 
-        // If this is a fade from black, use black overlay logic
-        if (asset.fromBlack) {
-            console.log(
-                `🔳 [FADE FROM BLACK] crossfadeTo with asset "${asset.name}", duration: ${duration}s`
-            );
-
-            // 1. Instantly hide both main assets
-            slideImg.style.display = 'none';
-            mediaPlayer.style.display = 'none';
-
-            // 2. Immediately show the new asset (under overlay)
-            if (asset.type === 'slide') {
-                slideImg.src = `/static/slides/${asset.name}`;
-                slideImg.style.display = 'block';
-            } else if (asset.type === 'video') {
-                mediaPlayer.src = `/static/media/${asset.name}`;
-                mediaPlayer.style.display = 'block';
-                mediaPlayer.load();
-                mediaPlayer.play().catch(err => {});
-            }
-
-            // 3. Make sure overlay is fully opaque and on top
-            blackOverlay.classList.add('blackened');
-            blackOverlay.style.transition = `opacity ${duration}s ease`;
-
-            // 4. Force reflow
-            void blackOverlay.offsetWidth;
-
-            // 5. Fade out overlay (removes black after DOM has updated)
-            setTimeout(() => {
-                blackOverlay.classList.remove('blackened');
-            }, 20);
-
-            // 6. After fade completes, clean up transition
-            setTimeout(() => {
-                blackOverlay.style.transition = '';
-            }, duration * 1000 + 100);
-
-            return;
-        }
-
-        // ---- NORMAL CROSSFADE LOGIC BELOW ----
-
-        // Hide black overlay if present (not needed for standard crossfade)
-        blackOverlay.classList.remove('blackened');
-
-        // Set duration for CSS variable (used by CSS transitions if desired)
-        document.documentElement.style.setProperty('--crossfade-duration', `${duration}s`);
-
-        // Select the correct overlay for crossfade (img or video)
-        let overlay = asset.type === 'video' ? crossfadeVideo : crossfadeImg;
-        let main = asset.type === 'video' ? mediaPlayer : slideImg;
-
-        overlay.src = asset.type === 'video'
-            ? `/static/media/${asset.name}`
-            : `/static/slides/${asset.name}`;
-
-        if (asset.type === 'video') overlay.load();
-
-        // Crossfade animation: overlay fades in, old asset fades out
-        requestAnimationFrame(() => {
-            overlay.style.visibility = 'visible';
-            overlay.classList.add('fade-in');
-            main.classList.add('fade-out');
-        });
-
-        setTimeout(() => {
-            // After crossfade duration, swap to new asset and clean up
-            updateView(asset, true);
-            socket.emit('sync_state', asset);
-
-            overlay.classList.remove('fade-in');
-            main.classList.remove('fade-out');
-        }, duration * 1000);
+        lastAsset = asset;
+      }, duration * 1000);
     }
 
-
-    function updateView(asset, fromCrossfade) {
-        console.log('Entering updateView');
-        if (!fromCrossfade) lastAsset = asset;
-        pollOverlay.style.display = 'none';
-
-        let mainElement = lastAsset.type === 'video' ? mediaPlayer : slideImg;
-        let crossfadeElement = asset.type === 'video' ? crossfadeVideo : crossfadeImg;
-
-        //Always hide the crossfade element after transition
-        crossfadeElement.classList.remove('fade-in');
-
-        //Show new asset
-        mainElement.style.visibility = 'visible';
-        mainElement.style.opacity = '1';
-
-        if (asset.type === 'slide') {
-            mediaPlayer.pause();
-            mediaPlayer.style.display = 'none';
-            slideImg.style.display = 'block';
-            slideImg.src = `/static/slides/${asset.name}`;
-        } else if (asset.type === 'video') {
-            slideImg.style.display = 'none';
-            mediaPlayer.style.display = 'block';
-            // Ensure video continues playing
-            mediaPlayer.play().catch(err => console.warn('Video play error:', err));
-        }
-    }
-
-    function updateVideoState(assetUpdate) {
-        console.log('updateVideoState called with asset:', assetUpdate);
-        console.log('Current mediaSource.src:', mediaSource.getAttribute('src'));
-        const asset = {...lastAsset, ...assetUpdate};
-        lastAsset = asset; // Update lastAsset immediately
-
-        if (asset.type !== 'video') return;
-        if (mediaPlayer.style.display === 'block') {
-            console.log('Video is playing and Display Block', mediaPlayer.style.display)
-            console.log('Video is playing and Video Src', mediaSource.getAttribute('src'))
-            const newSource = `/static/media/${asset.name}`;
-            //Ensure we only load source again when we're back after a crossfade
-            if (mediaSource.getAttribute('src') !== newSource) {
-                console.log('LOAD NEW VIDEO SOURCE')
-                mediaSource.src = newSource;
-                mediaPlayer.load();
-                mediaPlayer.currentTime = 0;
-            }
-            setupInitialVideoState(asset);
-        }
-    }
-
-    function setupInitialVideoState(asset) {
-        if (asset.video_time !== undefined) mediaPlayer.currentTime = Number(asset.video_time) || 0;
-        if (asset.video_speed !== undefined) mediaPlayer.playbackRate = Number(asset.video_speed) || 1.0;
-        mediaPlayer.muted = true;
-
-        if (asset.video_paused) {
-            mediaPlayer.pause();
-            console.log('Pause state true');
-        } else {
-            mediaPlayer.play().catch(err => console.warn('Video play error:', err));
-            console.log('Pause state FALSE, Playing video');
-        }
-    }
-</script>
+    // ---- Socket bindings ----
+    socket.on('connect', () => console.log('Audience connected'));
+    socket.on('sync_state', updateView);
+    socket.on('display_asset', updateView);
+    socket.on('crossfade_to', crossfadeTo);
+    socket.on('fade_to_black', (d) => fadeBlackOverlay(true, Number(d?.duration ?? 1)));
+    socket.on('fade_from_black', (d) => fadeBlackOverlay(false, Number(d?.duration ?? 1)));
+  </script>
 </body>
 </html>
